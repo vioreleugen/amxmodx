@@ -1,0 +1,1026 @@
+#include <amxmodx>
+#include <amxmisc>
+#include <cstrike>
+#include <fakemeta>
+#include <hamsandwich>
+
+#define PLUGIN "SHIELD BUG FIX"
+#define VERSION "1.5"
+#define AUTHOR "vioreleugen_22@yahoo.com"
+
+new const g_ConfigFile[] = "addons/amxmodx/configs/SHIELD_BUG_FIX.cfg"
+
+#define SIZE_KB 1000
+#define MAX_SECS 2
+#define MAX_WARNING 5
+#define MAX_PLAYERS 32 + 1 
+#define FLOOD_BEFORE_KICK 2
+#define XO_PLAYER 5
+#define m_flNextFullUpdateTime 614
+
+#if cellbits == 32
+const OFFSET_TEAM = 114 
+#else
+const OFFSET_TEAM = 139 
+#endif
+
+const OFFSET_LINUX = 5
+
+enum
+{
+   CS_TEAM_UNASSIGNED = 0,
+   CS_TEAM_T,
+   CS_TEAM_CT,
+   CS_TEAM_SPECTATOR
+}
+
+new g_identificare[][]=
+{
+	"echo_off", 
+	"gX4takingfire", 
+	"echo_on", 
+	"gX4sticktog", 
+	"gX4regroup", 
+	"gX4holdpos",
+	"gX4getout",
+	"votemapz.gX4",
+	"votemap02.gX4",
+	"votemap03.gX4"
+};
+
+new szRadioCommands[][] =
+{
+	"radio1", "coverme", "takepoint", "holdpos", "regroup", "followme", "takingfire",
+	"radio2", "go", "fallback", "sticktog", "getinpos", "stormfront", "report",
+	"radio3", "roger", "enemyspot", "needbackup", "sectorclear", "inposition", "reportingin", "getout", "negative", "enemydown"
+}
+
+new Float:g_Flooding[33] = {0.0, ...}
+new g_Flood[33] = {0, ...}
+new flooded[33]
+new Float:gRadio[33]
+
+new cvar_nameflood, cvar_default_binds, cvar_ping_optimizer, cvar_advertise, incercari, cmd_bug, cmd_bug_kick; 
+new cvar_anti_spec_bug, cvar_radio_spam,g_pCvarFullUpdateCoolDown;
+
+new ct[33], Float:start_time[33];
+new floodcfg_mode,floodcmd_mode;
+new Flag = 0
+new amx_check_time;
+new g_baseDir[128];
+new Float:g_Checking[33] = {0.0, ...},g_Check[33] = {0, ...};
+new Float:g_LastTime[MAX_PLAYERS],g_Count[MAX_PLAYERS];
+new g_bantime;
+new name[32],ip[32],authid[32];
+new text[200],language;
+
+Log(const message_fmt[],any:...){
+	static message[256];
+	vformat(message,255,message_fmt,2);
+	static filename[96];
+	static dir[64];
+	if(!dir[0]){
+		get_basedir(dir,63);
+		add(dir,63,"/logs");
+	}
+	format_time(filename,95,"%d.%m.%Y");
+	format(filename,95,"%s/SHIELD_Systems_%s.log",dir,filename);
+	log_to_file(filename,"%s",message);
+}
+
+public plugin_init(){
+	register_plugin("SHIELD BUG FIX","1.5","vioreleugen_22@yahoo.com");
+	amx_check_time=register_cvar("shield_check_time", "")
+	floodcfg_mode=register_cvar("shield_floodcfg_fix", "");
+	floodcmd_mode=register_cvar("shield_floodcmd_fix","");
+	g_bantime=register_cvar("shield_bantime", "");
+	language = register_cvar("shield_vaultlanguage", ""); 
+	register_clcmd("cl_autobuy","functions_cmd_check");
+	register_clcmd("cl_rebuy","functions_cmd_check");
+	register_clcmd("cl_setautobuy","cmd_check");
+	register_clcmd("cl_setrebuy","cmd_check");
+	for(new i=0;i<sizeof g_identificare;i++)register_clcmd(g_identificare[i],"functions_floodcmd_check");
+	register_clcmd("fullupdate", "functions_floodcfg_check");
+	cvar_nameflood = register_cvar("shield_name_flood_time", "");
+	cvar_default_binds = register_cvar("shield_default_binds_fix", "");
+	cvar_ping_optimizer = register_cvar("shield_ping_optimize", "");
+	cvar_advertise = register_cvar("shield_advertise", "");
+	register_cvar("shield_flood_chat_fix", "");
+	cmd_bug = register_cvar("shield_cmd_bug_fix",""); 
+	cmd_bug_kick = register_cvar("shield_cmd_bug_kick",""); 
+	g_pCvarFullUpdateCoolDown = register_cvar("shield_fullupdate_mindelay", "");
+	cvar_anti_spec_bug = register_cvar("shield_spec_bug_fix","");
+	register_forward(FM_ClientCommand, "ClientCommand_Post", true);
+	
+	for (new i=0; i<sizeof szRadioCommands; i++)
+	{
+		register_clcmd(szRadioCommands[i], "cmdRadio")
+	}
+	cvar_radio_spam = register_cvar("shield_spam_radio_fix","")  //0 Disabled
+
+	// Setari cmd bug 
+	register_clcmd("say", "hook_say");
+	register_clcmd("say_team", "hook_say");
+	
+	// Setari chat flood
+	register_dictionary("antiflood.txt");
+	register_clcmd("say", "FLOODCHAT");
+	register_clcmd("say_team", "FLOODCHAT");
+	
+	// La cate secunde sa apara mesajul setat prin cvar_advertise
+	set_task( 300.0, "msg_chat", 0, "", 0, "b"  );
+	
+	// Spec bug block
+	RegisterHam(Ham_Spawn, "player", "spawn_player", 1);
+	
+	// Executarea cvarurilor din cfg
+	new configsDir[64]
+	get_configsdir(configsDir, 63)
+	server_cmd("exec %s/SHIELD_BUG_FIX.cfg", configsDir)
+}  
+public client_putinserver(id) {
+	g_LastTime[id]=0.0 
+	g_Count[id]=0 
+	ct[id]=0;
+	start_time[id]=0.0;
+	
+	if(get_pcvar_num(cvar_ping_optimizer) == 1)
+      {
+        set_task(7.0, "ping_optimizer", id)
+      }
+}
+public ping_optimizer(id) {
+	client_cmd(id, "rate 25000")
+	client_cmd(id, "fps_max 101")
+	client_cmd(id, "cl_updaterate 101")
+	client_cmd(id, "cl_cmdrate 101")
+	chat_color(id, "^4[SHIELD Systems]: ^3Setarile dumneavoastra au fost initializate!")
+}
+public eventDeathMsg() {
+	new ids[1]
+	ids[0] = read_data(2)
+	set_task(1.0,"fixit",0,ids,1)
+	return PLUGIN_CONTINUE
+}
+public functions_cmd_check(id)
+	{
+	new szCommand[512];
+	new dwCount = read_argc();
+	for(new i=1;i<dwCount;i++)
+		{
+		read_argv(i,szCommand,charsmax(szCommand));
+		if(check_long(szCommand,charsmax(szCommand)))
+			{
+			AUTOBUY(id)
+			Log("[SHIELD Systems]: ^"%s^"<%s> %s a incercat sa dea FLOOD la server prin exploitul AUTOBUY si a primit kick.", name, authid, ip);
+			return PLUGIN_HANDLED;
+		}
+	}
+	return PLUGIN_CONTINUE;
+}
+public check_long(c_szCommand[],c_dwLen)
+	{
+	new m_szCommand[512]
+	while(strlen(m_szCommand))
+		{
+		strtok( c_szCommand, m_szCommand, charsmax( m_szCommand ), c_szCommand, c_dwLen , ' ', 1 );
+		if( strlen( m_szCommand ) > 31) return true;
+	}
+	return false;
+}
+public cmd_check( id ) 
+{ 
+    static arg[512], args, i 
+    args = read_argc( ) 
+
+    for( i = 1; i < args; ++i ) 
+    { 
+        read_argv( i, arg, charsmax( arg ) ) 
+
+        if( is_cmd_long( arg, charsmax( arg ) ) ) 
+        {  
+            return PLUGIN_HANDLED 
+        } 
+    } 
+
+    return PLUGIN_CONTINUE 
+} 
+
+stock bool:is_cmd_long( string[], const len ) 
+{ 
+    static cmd[512] 
+
+    while( strlen( string ) ) 
+    { 
+        strtok( string, cmd, charsmax( cmd ), string, len , ' ', 1 ) 
+
+        if( strlen( cmd ) > 31 ) return true 
+    } 
+
+    return false 
+} 
+public functions_floodcmd_check(id)
+	{
+	if (!is_user_connected(id))
+		{
+		return PLUGIN_HANDLED;
+	}
+	
+	if(get_pcvar_num(floodcmd_mode)<=1)
+		{
+		KICKCMDFLOOD(id)
+		Log("[SHIELD Systems]: ^"%s^"<%s> %s a incercat sa dea FLOOD la server prin CMD si a primit kick.", name, authid, ip);
+	}
+	
+	else if(get_pcvar_num(floodcmd_mode)<=2)
+		{
+		BANCMDFLOOD(id)
+		Log("[SHIELD Systems]: ^"%s^"<%s> %s a incercat sa dea FLOOD la server prin CMD si a primit ban temporar.", name, authid, ip);
+	}
+	return PLUGIN_CONTINUE;
+}
+public functions_floodcfg_check(id)
+	{
+	new Float:maxCheck = get_pcvar_float(amx_check_time)
+	
+	if (maxCheck)
+		{
+		new Float:nexTime = get_gametime()
+		
+		if (g_Checking[id] > nexTime)
+			{
+			if (g_Check[id] >= 5)
+				{
+				
+				g_Checking[id] = nexTime + maxCheck 
+				
+				//+Argus
+				if(Flag == 0)
+					{
+					Flag = 1 
+					
+					if(get_pcvar_num(floodcfg_mode)<=1)
+						{
+						KICKCFGFLOOD(id)
+						Log("[SHIELD Systems]: ^"%s^"<%s> %s a incercat sa dea FLOOD la server prin CFG si a primit kick.", name, authid, ip);
+					}
+					
+					else if(get_pcvar_num(floodcfg_mode)<=2)
+						{
+						BANCFGFLOOD(id)
+						Log("[SHIELD Systems]: ^"%s^"<%s> %s a incercat sa dea FLOOD la server prin CFG si a primit ban temporar.", name, authid, ip);
+					}
+				}
+				//-Argus
+				
+				return PLUGIN_HANDLED
+				
+			}
+			g_Check[id]++
+		}
+		else if (g_Check[id])
+			{
+			g_Check[id]--
+		}
+		
+		g_Checking[id] = nexTime + maxCheck
+	}
+	
+	Flag = 0 //Argus
+	
+	return PLUGIN_CONTINUE
+}
+public client_command(id) {
+	if(!(get_user_flags(id) & ADMIN_BAN)) 
+		return 0;
+	
+	new szCmd[32], szClass[32];
+	read_argv(0, szCmd, charsmax(szCmd));
+	read_argv(1, szClass, charsmax(szClass));
+	
+	if((equali(szCmd, "amx_addban") || equali(szCmd, "admin_addban"))) {
+		if((containi(szClass, ".0") != -1)) {
+			new szAdminName[64], szAdminAuthId[32], szAdminIp[32];
+			get_user_name(id, szAdminName, 63);
+			get_user_authid(id, szAdminAuthId, 31);
+			get_user_ip(id, szAdminIp, 31);
+			
+			console_print(id, "[SHIELD Systems]: %s contine o clasa a unui Ip sau este o clasa care nu poate fi banata !", szClass);
+			if((containi(szAdminAuthId, "STEAM_0:") != -1)) {
+				Log("[SHIELD Systems]: Adminul %s [STEAMID: %s | IP ADDRESS: %s] a incercat sa baneze clasa de Ip -> %s !", szAdminName, szAdminAuthId, szAdminIp, szClass)
+				} else {
+				Log("[SHIELD Systems]: Adminul %s [IP ADDRESS: %s] a incercat sa baneze clasa de Ip -> %s !", szAdminName, szAdminIp, szClass)
+			}
+			
+			return 1;
+		}
+	}
+	return 0;
+}
+public fixit(ids[]) {
+	client_cmd(ids[0],"+duck;-duck;spec_menu 0")
+}
+public client_disconnect(id){
+	g_LastTime[id]=0.0 
+	g_Count[id]=0 
+} 
+public client_connect(id) {
+	
+	flooded[id] = 0
+	
+	if(get_pcvar_num(cvar_default_binds) == 1)
+      {
+         client_cmd(id, "bind m chooseteam")
+         client_cmd(id, "bind n nightvision")
+         client_cmd(id, "bind z radio1")
+         client_cmd(id, "bind x radio2")
+         client_cmd(id, "bind c radio3")
+         client_cmd(id, "bind b buy")
+         client_cmd(id, "bind z radio1")
+         client_cmd(id, "unbind v")
+      }
+}
+public client_infochanged(id)
+{
+	new newname[32], oldname[32];
+	get_user_info(id, "name", newname,31);
+	get_user_name(id, oldname, 31);
+		
+	new szName[ 32 ], szSteamID[ 32 ], szIP[ 32 ], szCurrent_Time [ 64 ];
+	
+	get_user_name( id, szName, 31 );
+	get_user_authid(id, szSteamID, 31);
+	get_user_ip( id, szIP, 31, 1 );
+	get_time ( "Data: %d/%m/%Y - Ora: %H:%M:%S", szCurrent_Time, 63 );
+	
+	if(equal(newname, oldname))
+		return PLUGIN_HANDLED;
+	else
+	{	
+		reset:
+		if(ct[id]==0)
+		{
+			start_time[id] = get_gametime();
+			ct[id]++;
+		}
+		else
+		{
+			if(get_gametime() - start_time[id] < get_pcvar_num(cvar_nameflood))
+				ct[id]++;
+			else
+			{	
+				ct[id]=0;
+				goto reset;
+			}
+		}
+		
+		if(ct[id]==3)
+		{
+			chat_color(id, "^4[SHIELD Systems]:^1*** Nick change flood! Stop or you will be kicked! ***");
+			chat_color(id, "^4[SHIELD Systems]:^1*** Nick change flood! Stop or you will be kicked! ***");
+		}
+		
+		if(ct[id]==4)
+		{
+			if( (get_gametime() - start_time[id]) < get_pcvar_num(cvar_nameflood))
+			{
+				ct[id]=0;
+				server_cmd("kick #%d ^"[SHIELD Systems] AI PRIMIT KICK PENTRU SPAM NICK .^"", get_user_userid(id));
+				Log("[SHIELD Systems]: (%s) ^"%s^" cu SteamID (^"%s^") si IP (^"%s^") a incercat sa dea FLOOD la server prin SPAM NICK si a primit kick.", szCurrent_Time, szName, szSteamID, szIP );
+				return PLUGIN_HANDLED;
+			}
+			else
+			{
+				ct[id]=0;
+				goto reset;
+			}
+		}
+	}
+	return PLUGIN_HANDLED;
+}
+public AUTOBUY(id) 
+	{
+	get_user_name(id, name, 31)
+	get_user_ip(id, ip, 31, 1)
+	get_user_authid(id, authid, 31)
+	server_cmd("kick #%d ^"[SHIELD Systems] AI PRIMIT KICK PENTRU AUTOBUY.^"", get_user_userid(id));
+}
+public KICKCMDFLOOD(id) 
+	{
+	get_user_name(id, name, 31)
+	get_user_ip(id, ip, 31, 1)
+	get_user_authid(id, authid, 31)
+	server_cmd("kick #%d ^"[SHIELD Systems] AI PRIMIT KICK PENTRU CMD FLOOD.^"", get_user_userid(id));
+}
+public BANCMDFLOOD(id) 
+	{
+	get_user_name(id, name, 31)
+	get_user_ip(id, ip, 31, 1)
+	get_user_authid(id, authid, 31)
+	server_cmd("kick #%d ^"[SHIELD Systems] AI PRIMIT BAN PENTRU CMD FLOOD.^";wait;addip %d ^"%s^";wait;writeip", authid,get_pcvar_num(g_bantime), ip);
+}
+public KICKCFGFLOOD(id) 
+	{
+	get_user_name(id, name, 31)
+	get_user_ip(id, ip, 31, 1)
+	get_user_authid(id, authid, 31)
+	server_cmd("kick #%d ^"[SHIELD Systems] AI PRIMIT KICK PENTRU CFG FLOOD.^"", get_user_userid(id));
+}
+public BANCFGFLOOD(id) 
+	{
+	get_user_name(id, name, 31)
+	get_user_ip(id, ip, 31, 1)
+	get_user_authid(id, authid, 31)
+	server_cmd("kick #%d ^"[SHIELD Systems]  AI PRIMIT BAN PENTRU CFG FLOOD.^";wait;addip %d ^"%s^";wait;writeip", authid,get_pcvar_num(g_bantime), ip);
+}
+public msg_chat( )
+{
+	if( get_pcvar_num( cvar_advertise ) == 0 ) return 0;
+	
+	color_chat( 0, "^4Acest server foloseste ^3Bug Fix by SHIELD ^4versiunea 1.5 ^1( vioreleugen_22@yahoo.com )", PLUGIN, VERSION );
+	
+	return 1;
+}
+public hook_say(id)
+	{
+	if (!is_user_connected(id))
+		return PLUGIN_HANDLED
+	
+	static arg[192]
+	read_argv(1, arg, charsmax(arg))
+	
+	new szName[ 32 ], szSteamID[ 32 ], szIP[ 32 ], szCurrent_Time [ 64 ];
+	
+	get_user_name( id, szName, 31 );
+	get_user_authid(id, szSteamID, 31);
+	get_user_ip( id, szIP, 31, 1 );
+	get_time ( "Data: %d/%m/%Y - Ora: %H:%M:%S", szCurrent_Time, 63 );
+	
+	if (contain(arg, "%") != -1)
+		{
+		replace_all(arg, charsmax(arg), "%", " ")
+		if(get_pcvar_num(cmd_bug) == 1)
+			{
+			print_chatColor(id,"^4[SHIELD Systems]: ^1Esti suspectat de ^4CMD BUG ^1, comanda ta a fost ^4blocata ^1! ")
+			incercari++
+		}
+		if(get_pcvar_num(cmd_bug_kick) == 1 && incercari == 2)
+			{
+			new szName[33]
+			get_user_name(id,szName,31)
+			server_cmd("kick #%d ^"[SHIELD Systems] AI PRIMIT KICK PENTRU CMD BUG.^"", get_user_userid(id));
+			incercari = 0;
+			Log("[SHIELD Systems]: (%s) ^"%s^" cu SteamID (^"%s^") si IP (^"%s^") a incercat sa dea FLOOD la server prin CMD BUG si a primit kick.", szCurrent_Time, szName, szSteamID, szIP );
+		}
+		return PLUGIN_HANDLED
+	}
+	return PLUGIN_CONTINUE;
+}
+public FLOODCHAT(id)
+{
+	new Float:maxChat = get_cvar_float("shield_flood_chat_fix")
+	
+	new szName[ 32 ], szSteamID[ 32 ], szIP[ 32 ], szCurrent_Time [ 64 ];
+	
+	get_user_name( id, szName, 31 );
+	get_user_authid(id, szSteamID, 31);
+	get_user_ip( id, szIP, 31, 1 );
+	get_time ( "Data: %d/%m/%Y - Ora: %H:%M:%S", szCurrent_Time, 63 );
+	
+	if (maxChat)
+	{
+		new Float:nexTime = get_gametime()
+		
+		if (g_Flooding[id] > nexTime)
+		{
+			if (g_Flood[id] >= 3)
+			{
+				if (flooded[id] == FLOOD_BEFORE_KICK) {
+					server_cmd("kick #%d ^"[SHIELD Systems] AI PRIMIT KICK PENTRU FLOOD CHAT..^"", get_user_userid(id));
+					Log("[SHIELD Systems]: (%s) ^"%s^" cu SteamID (^"%s^") si IP (^"%s^") a incercat sa dea FLOOD la server prin FLOODAREA CHATULUI si a primit kick.", szCurrent_Time, szName, szSteamID, szIP );
+
+					return PLUGIN_HANDLED
+				}
+				else
+				{
+					flooded[id]++
+					
+					new playername[33]
+					get_user_name(id, playername, 32)
+					
+					set_hudmessage(0, 255, 0, -1.0, -1.0, 0, 6.0, 12.0)
+					print_chatColor(id,"^4[SHIELD Systems]:^1 Esti suspectat de ^4 FLOOD CHAT ^3 la urmatoarea incercare vei primi ^4kick !")
+					
+					
+					client_print(id, print_notify, "** %L **", id, "STOP_FLOOD")
+					g_Flooding[id] = nexTime + maxChat + 3.0
+					return PLUGIN_HANDLED
+				}
+			}
+			g_Flood[id]++
+		}
+		else if (g_Flood[id])
+		{
+			g_Flood[id]--
+		}
+		
+		g_Flooding[id] = nexTime + maxChat
+	}
+	
+	return PLUGIN_CONTINUE
+}
+public ClientCommand_Post(id)
+{
+    new szCommand[12]
+    if( equali(szCommand, "fullupdate") )
+    {
+        set_pdata_float(id, m_flNextFullUpdateTime, get_gametime() + get_pcvar_float(g_pCvarFullUpdateCoolDown), XO_PLAYER)
+    }
+}  
+public cmdRadio(id)
+{
+	
+	new iTime = get_pcvar_num(cvar_radio_spam)
+	
+	if(!is_user_alive(id))
+	{
+		return PLUGIN_HANDLED_MAIN
+	}
+	
+	if(iTime > 0)
+	{  		
+		new Float:fTime = get_gametime()
+		
+		if(fTime - gRadio[id] < iTime)
+		{
+			
+			print_chatColor(id,"^4[SHIELD Systems]:^1 Esti suspectat de ^4 SPAM RADIO ,^1comanda ta a fost ^4blocata ^1!")
+			
+			return PLUGIN_HANDLED_MAIN
+		}
+		
+		gRadio[id] = fTime
+	}
+	
+	return PLUGIN_CONTINUE
+}
+public spawn_player(id)
+{
+   if(get_pcvar_num(cvar_anti_spec_bug) == 1)
+      {
+         new team = fm_get_user_team(id)
+         new name[32]
+         get_user_name(id, name, 31)
+         if(team == CS_TEAM_SPECTATOR && is_user_alive(id))
+         {
+            color_chat(0, "^4[SHIELD Systems]: ^3%s ^1a fost prins folosind ^4Spec Bug.", name)
+            user_kill(id)
+            fm_set_user_team(id, CS_TEAM_CT, 1)
+         }
+      }
+}
+stock fm_get_user_team(id)
+{
+    return get_pdata_int(id, OFFSET_TEAM, OFFSET_LINUX);
+}
+
+stock fm_set_user_team(id, {CsTeams,_}:team, update = 1)
+{
+   set_pdata_int(id, OFFSET_TEAM, _:team, OFFSET_LINUX)
+   set_pev(id, pev_team, _:team);
+
+   if(update)
+   {
+      static _msg_teaminfo; if(!_msg_teaminfo) _msg_teaminfo = get_user_msgid("TeamInfo");
+      static teaminfo[][] = { "UNASSIGNED", "TERRORIST", "CT", "SPECTATOR" };
+    
+      message_begin(MSG_ALL, _msg_teaminfo);
+      write_byte(id);
+      write_string(teaminfo[_:team]);
+      message_end();
+   }
+}
+stock print_chatColor(const id,const input[], any:...)
+	{
+	new msg[191], players[32], count = 1;
+	vformat(msg,190,input,3);
+	replace_all(msg,190,"\g","^4");// green
+	replace_all(msg,190,"\n","^1");// normal
+	replace_all(msg,190,"\t","^3");// team
+	
+	if (id) players[0] = id; else get_players(players,count,"ch");
+	for (new i=0;i<count;i++)
+		if (is_user_connected(players[i]))
+		{
+		message_begin(MSG_ONE_UNRELIABLE,get_user_msgid("SayText"),_,players[i]);
+		write_byte(players[i]);
+		write_string(msg);
+		message_end();
+	}
+}
+stock color_chat(const id, const input[], any:...)
+{
+   new count = 1, players[32]
+   static msg[191]
+   vformat(msg, 190, input, 3)
+
+   replace_all(msg, 190, ".v", "^4")
+   replace_all(msg, 190, ".g", "^1")
+   replace_all(msg, 190, ".e", "^3")
+
+   if (id) players[0] = id; else get_players(players, count, "ch")
+   {
+      for (new i = 0; i < count; i++)
+      {
+         if (is_user_connected(players[i]))
+         {
+            message_begin(MSG_ONE_UNRELIABLE, get_user_msgid("SayText"), _, players[i])
+            write_byte(players[i]);
+            write_string(msg);
+            message_end();
+         }
+      }
+   }
+} 
+stock chat_color(const id, const input[], any:...)
+{
+	new count = 1, players[32]
+	static msg[191]
+	vformat(msg, 190, input, 3)
+	replace_all(msg, 190, "!g", "^4")
+	replace_all(msg, 190, "!y", "^1")
+	replace_all(msg, 190, "!team", "^3")
+	replace_all(msg, 190, "!team2", "^0")
+	if (id) players[0] = id; else get_players(players, count, "ch")
+	{
+		for (new i = 0; i < count; i++)
+		{
+			if (is_user_connected(players[i]))
+			{
+				message_begin(MSG_ONE_UNRELIABLE, get_user_msgid("SayText"), _, players[i])
+				write_byte(players[i])
+				write_string(msg)
+				message_end()
+			}
+		}
+	}
+}
+public plugin_precache()
+{
+	server_cmd("exec %s", g_ConfigFile)
+	if(!file_exists(g_ConfigFile)) 
+	{
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ============= SHIELD Bug Fix @ 2015 ============= ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// CONTACT : vioreleugen_22@yahoo.com ")
+		write_file(g_ConfigFile, "// AUTOR : Motanel :x [dLL] ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD Bug Fix 1.5  ======")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// ====== SHIELD SYSTEMS   ======")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "//  => shield_check_time")
+		write_file(g_ConfigFile, "// shield_check_time = ^"1.0^" activat / 0 dezactivat")
+		write_file(g_ConfigFile, "// Verifica daca sunt playeri suspecti de flood & bug ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_check_time ^"1.0^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// ====== SHIELD ADVERTISE   ======")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_advertise ")
+		write_file(g_ConfigFile, "// Efect: Afiseaza un mesaj odata la 5 minute prin care anunta clientii ca serverul este protejat de SHIELD Bug Fix.")
+		write_file(g_ConfigFile, "// Valoarea 0: Mesajele sunt dezactivate.")
+		write_file(g_ConfigFile, "// Valoarea 1: Mesajele sunt activate. ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_advertise ^"1^" ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD CFG FLOOD   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_floodcfg_fix")
+		write_file(g_ConfigFile, "// Valoarea 0 : Functia este dezactivata")
+		write_file(g_ConfigFile, "// Valoarea 1 : Atacatorul primeste kick la urmatoarea incercare ")
+		write_file(g_ConfigFile, "// Valoarea 2: Atacatorul primeste ban cateva minute, setat prin cvarul shield_bantime.")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_floodcfg_fix ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD CMD FLOOD   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_floodcmd_fix")
+		write_file(g_ConfigFile, "// Valoarea 0 : Functia este dezactivata")
+		write_file(g_ConfigFile, "// Valoarea 1 : Atacatorul primeste kick la urmatoarea incercare ")
+		write_file(g_ConfigFile, "// Valoarea 2: Atacatorul primeste ban cateva minute, setat prin cvarul shield_bantime.")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_floodcmd_fix ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD BAN TIME   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_bantime")
+		write_file(g_ConfigFile, "// Utilizare: Functioneaza doar in cazul in care 1 din cvarurile  shield_floodcmd_fix sau shield_floodcfg_fix este setata pe 2.")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_bantime ^"30^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD FLOOD CHAT    ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_flood_chat_fix ")
+		write_file(g_ConfigFile, "// Utilizare: Blocheaza floodul in chat si daca atacatorul continua primeste kick cu motivul [SHIELD Systems] AI PRIMIT KICK PENTRU FLOOD CHAT. ")
+		write_file(g_ConfigFile, "// Info: Cvarul  shield_flood_chat_fix 0.75  - Atacatorul poate scrie in chat decat 1 data la 0.75 secunde sau va primi kick.")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// INPORTANT : Dezactivati antiflood.amxx din plugins.ini pentru a rula corespunzator pluginul.")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_flood_chat_fix ^"0.75^" ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD DEFAULT BINDS   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_default_binds_fix")
+		write_file(g_ConfigFile, "// Valoarea 0 : Functia este dezactivata")
+		write_file(g_ConfigFile, "// Valoarea 1 : Seteaza configul jucatorilor pe default ")
+		write_file(g_ConfigFile, "// Utilizare : seteaza tastele cele mai folosite in joc pe default")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_default_binds_fix ^"0^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD SPEC BUG   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_spec_bug_fix")
+		write_file(g_ConfigFile, "// Valoarea 0 : Functia este dezactivata")
+		write_file(g_ConfigFile, "// Valoarea 1 : Blocheaza bugul ")
+		write_file(g_ConfigFile, "// Utilizare  : Blocheaza celebrul SPEC BUG")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_spec_bug_fix ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD PING OPTIMIZE   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_ping_optimize")
+		write_file(g_ConfigFile, "// Valoarea 0 : Functia este dezactivata")
+		write_file(g_ConfigFile, "// Valoarea 1 : Functia este activata ")
+		write_file(g_ConfigFile, "// Utilizare : Comenzi de unlag la conectarea jucatorilor")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_ping_optimize ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD RADIO FLOOD   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_spam_radio_fix")
+		write_file(g_ConfigFile, "// Valoarea 0 : Functia este dezactivata")
+		write_file(g_ConfigFile, "// Valoarea 10 : Reprezinta secundele in care jucatorul are voie sa foloseasca comenzile de radio (coverme,takepoint,holdpos etc)")
+		write_file(g_ConfigFile, "// Utilizare :  Blocheza comenzile radio repetate executate de jucatori")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_spam_radio_fix ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD FULLUPDATE MINDELAY   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_fullupdate_mindelay ")
+		write_file(g_ConfigFile, "// Valoarea 1.5 : (Implicit) - Va permite doar o data la 1.5 secunde (Recomandat)")
+		write_file(g_ConfigFile, "// Valoarea 0 : Functia nu va permite deloc folosirea fullupdate ")
+		write_file(g_ConfigFile, "// Utilizare :  Acest cvar nu permite folosirea comenzii fullupdate decat o data la 1.5 milisecunde")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_fullupdate_mindelay ^"1.4^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD CMD BUG   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "// => shield_cmd_bug ")
+		write_file(g_ConfigFile, "// Valoarea 1 : Blocheaza bugul")
+		write_file(g_ConfigFile, "// Valoarea 0 : Dezactivat ")
+		write_file(g_ConfigFile, "// Utilizare :  Eroare care supra incarca clientul jucatorului si il deconecteaza de la server .")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "// => shield_cmd_bug_kick ")
+		write_file(g_ConfigFile, "// Valoarea 1 : Atacatorul primeste kick")
+		write_file(g_ConfigFile, "// Valoarea 0 : Dezactivat ")
+		write_file(g_ConfigFile, "Utilizare : Atacatorul primeste kick la a doua incercare cu motivul - [SHIELD Systems] AI PRIMIT KICK PENTRU CMD BUG")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_cmd_bug  ^"1^"")
+		write_file(g_ConfigFile, "shield_cmd_bug_kick  ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD NAME FLOOD   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_name_flood_time ")
+		write_file(g_ConfigFile, "// Valoarea 2 : Atacatorul isi poate schimba numele doar odata la  2 secunde sau va primi kick.")
+		write_file(g_ConfigFile, "// Valoarea 0 : Dezactivat ")
+		write_file(g_ConfigFile, "// Utilizare: Blocheaza floodul prin schimbare nick si daca atacatorul continua primeste kick cu motivul [SHIELD Systems] AI PRIMIT KICK PENTRU SPAM NICK. ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_name_flood_time  ^"2^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== SHIELD DELETE VAULT   ====== ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "//  => shield_vaultlanguage ")
+		write_file(g_ConfigFile, "// Valoarea 1 : Pentru limba engleza setati cvar pe: 1")
+		write_file(g_ConfigFile, "// Valoarea 2 :Pentru limba romana setati cvar pe: 2")
+		write_file(g_ConfigFile, "// Valoarea 0 :Dezactivat")
+		write_file(g_ConfigFile, "// Utilizare :  Sterge vault.ini si custom.hpk cand are marime ce depaseste 1 kb")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "shield_vaultlanguage  ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "echo ^"===========================================================^" ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "echo ^"[SHIELD SYSTEMS] SHIELD_BUG_FIX.cfg executat cu succes.^" ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "echo ^"===========================================================^" ")
+	}
+}
+
+public plugin_end()
+	{
+	format(g_baseDir,127,"%s/data/vault.ini",g_baseDir)
+	if (file_size(g_baseDir, 0)>=1024)
+		{
+		if (file_exists(g_baseDir))
+			{
+			delete_file(g_baseDir)
+		}
+		// Set language En
+		if(get_pcvar_num(language) == 1)
+			{
+			format(text,199,"server_language en",g_baseDir)
+			Log("[SHIELD Systems]: Fisierul 'vault.ini' a fost rescris in limba engleza conform setarilor, deoarece avea o marime mai mare de 1 KB.")
+			write_file(g_baseDir, text , -1) 
+		}
+		// Set language Ro
+		else 
+		if(get_pcvar_num(language) == 2)
+			{
+			format(text,199,"server_language ro",g_baseDir)
+			Log("[SHIELD Systems]: Fisierul 'vault.ini' a fost rescris in limba romana conform setarilor, deoarece avea o marime mai mare de 1 KB.")
+			write_file(g_baseDir, text , -1) 
+		}
+	}
+	if (file_size("custom.hpk")/SIZE_KB > 1000.0)
+		{
+		Log("[SHIELD Systems]: Custom.hpk a fost sters conform setarilor pentru ca avea marimea (%d)", file_size("custom.hpk")/SIZE_KB)
+		delete_file("custom.hpk")
+	}
+}
+/* AMXX-Studio Notes - DO NOT MODIFY BELOW HERE
+*{\\ rtf1\\ ansi\\ deff0{\\ fonttbl{\\ f0\\ fnil Tahoma;}}\n\\ viewkind4\\ uc1\\ pard\\ lang1033\\ f0\\ fs16 \n\\ par }
+*/
