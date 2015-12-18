@@ -1,0 +1,1930 @@
+#include <amxmodx>
+#include <amxmisc>
+#include <cstrike>
+#include <fakemeta>
+#include <fun>
+#include <fakemeta_util>
+#include <engine>
+#include <csx>
+#include <xs>
+
+#define IMMUNITY_ACCESS_LEVEL ADMIN_IMMUNITY
+#define AUTO_TEAM_JOIN_DELAY 0.1
+#define TEAM_SELECT_VGUI_MENU_ID 2
+#define DISTANCE 120.0
+#define UPDATE_FREQ 0.2
+#define MAX_PLAYERS 32
+
+// max number of words in swear list and max number of lines in replace list
+#define MAX_WORDS 150
+#define MAX_REPLACE 50
+
+// global variables for storing the swear list and replace list and their respective number of lines
+new g_swearWords[MAX_WORDS][20]
+new g_replaceLines[MAX_REPLACE][192]
+new g_swearNum
+new g_replaceNum
+
+new DEFUSING_SOUND[] = "weapons/c4_click.wav"
+
+new g_NumberID = 0
+new g_iRandomNumbers[11]
+
+new g_Defusing[MAX_PLAYERS+1]
+new Float:g_fDelay[MAX_PLAYERS+1]
+ 
+new cvar_restrict, cvar_numbers, cvar_wallplant
+
+#define PLUGIN "MULTIPLUGIN"
+#define VERSION "1.5"
+#define AUTHOR "vioreleugen_22@yahoo.com"
+
+new const g_ConfigFile[] = "addons/amxmodx/configs/MULTIPLUGIN.cfg"
+new const g_RestrictedNick[] = "addons/amxmodx/configs/restricted_things.ini"
+new const g_CENZURAT[] = "addons/amxmodx/configs/cuvinte-cenzurate.ini"
+new const g_CENZURATREPLACEAMENTS[] = "addons/amxmodx/configs/replacements-cenzurat.ini"
+new const g_REDIRECT[] = "addons/amxmodx/configs/redirect_logs.txt"
+
+#define FLOOD_BEFORE_KICK 2
+
+new Float:g_Flooding[33] = {0.0, ...}
+new g_Flood[33] = {0, ...}
+new flooded[33]
+new bool: g_Restart = true
+
+#define ADMIN_LEVEL ADMIN_LEVEL_B
+
+
+/***************************************************************************************************
+uc_adminmode & uc_playermode:
+a = The dead can hear the alive teammates non-teammsgs.
+b = The dead can hear the alive non-teammates non-teammsgs.
+c = The alive can hear the dead teammates non-teammsgs.
+d = The alive can hear the dead non-teammates non-teammsgs
+
+e = The dead can hear their alive teamates teammsgs
+f = The alive can hear their dead teamates teammsgs
+g = The dead can hear their dead non-teamates teammsgs
+h = The alive can hear their alive non-teamates teammsgs
+i = The dead can hear their alive non-teamates teammsgs
+j = The alive can hear their dead non-teamates teammsgs
+***************************************************************************************************/
+
+/*
+* 
+* Cred goes out to cs1.6 who requested it.
+* He also patiently tested it and found bugs.
+* 
+*/
+
+new const textchannels[][] = {
+	"#Cstrike_Chat_T",
+	"#Cstrike_Chat_CT",
+	"#Cstrike_Chat_Spec",
+	"#Cstrike_Chat_All",
+	"#Cstrike_Chat_AllSpec",
+	"#Cstrike_Chat_AllDead",
+	"#Cstrike_Chat_T_Dead",
+	"#Cstrike_Chat_CT_Dead"
+};
+
+new szRadioCommands[][] =
+{
+	"radio1", "coverme", "takepoint", "holdpos", "regroup", "followme", "takingfire",
+	"radio2", "go", "fallback", "sticktog", "getinpos", "stormfront", "report",
+	"radio3", "roger", "enemyspot", "needbackup", "sectorclear", "inposition", "reportingin", "getout", "negative", "enemydown"
+}
+
+new serverip,redirectlogs,minplayers;
+new gCvarUnlag, gCvarDefaultBinds, gParasutaAutomata;
+new g_type, g_enabled, g_recieved, bool:g_showrecieved, g_hudmsg1, g_hudmsg2
+new bool:WarmUp;
+new Seconds;
+new gPcvar[2];
+new bool:g_bSemiclip[33][33];
+new bool:g_bHasSemiclip[33];
+new bool:g_bSemiclipEnabled;
+new g_iTaskId;
+new g_iForwardId[3];
+new g_iMaxPlayers;
+new g_iCvar[3];
+new Array:g_Things = Invalid_Array;
+new g_NamesCount = 0;
+new g_Default = 0;
+new g_New = 0;
+new Float:gRadio[33]
+new pTime,pBlock
+new g_msgid_SayText;
+new g_maxPlayers;
+new pcvar_adminmode;
+new pcvar_playermode;
+new white
+new lightning
+new g_sModelIndexSmoke
+new g_pcvar_team
+new g_pcvar_class
+new g_pcvar_imm
+new mp_slaylosers
+new g_iCvarPing, g_iCvarFlux;
+new g_iPing, g_iFlux;
+new g_iOffset[ 33 ][ 2 ]
+new g_iArgumentPing[ 33 ][ 3 ];
+new g_iPingOverride[ 33 ] = { -1, ... };
+
+public plugin_init()
+{
+	register_plugin("MULTIPLUGIN", "1.5", "vioreleugen_22@yahoo.com")
+	register_event("SendAudio", "end_round", "a", "2=%!MRAD_terwin", "2=%!MRAD_ctwin", "2=%!MRAD_rounddraw");
+
+	mp_slaylosers = register_cvar("mp_slaylosers", "", FCVAR_SERVER);
+	
+	// AUTO JOIN ON CONNECT
+	register_message(get_user_msgid("ShowMenu"), "message_show_menu");
+	register_message(get_user_msgid("VGUIMenu"), "message_vgui_menu");
+
+	g_pcvar_team = register_cvar("ajc_team", "");
+	g_pcvar_class = register_cvar("ajc_class", "");
+	g_pcvar_imm = register_cvar("ajc_imm", "");
+	
+	// PING FAKER 
+	register_forward( FM_UpdateClientData, "fw_UpdateClientData" );
+	
+	g_iCvarPing = register_cvar( "pingfake_ping", "", FCVAR_SERVER );
+	g_iCvarFlux = register_cvar( "pingfake_flux", "", FCVAR_SERVER );
+	
+	g_iMaxPlayers = get_maxplayers( );
+	
+	// ULTIMATE CHAT
+	pcvar_adminmode = register_cvar("uc_adminmode", "");
+	pcvar_playermode = register_cvar("uc_playermode", "");
+	
+	g_msgid_SayText = get_user_msgid("SayText");
+	g_maxPlayers = get_maxplayers();
+	
+	register_concmd("say", "HandleSay");
+	register_concmd("say_team", "HandleSay");
+	
+	// NO RADIO FLOOD
+	for (new i=0; i<sizeof szRadioCommands; i++)
+	{
+		register_clcmd(szRadioCommands[i], "cmdRadio");
+	}
+	pTime = register_cvar("nrf_time","");  //0 Disabled
+	pBlock = register_cvar("nrf_block_fith","");
+	
+	register_message(get_user_msgid("SendAudio"),"FireInTheHole");
+	register_cvar("srf_version",VERSION,FCVAR_SERVER|FCVAR_SPONLY);
+	
+	// RESTRICTED NAMES
+	g_Default = register_cvar("amx_default_advert", "", FCVAR_SERVER | FCVAR_SPONLY | FCVAR_UNLOGGED | FCVAR_EXTDLL);
+	g_New = register_cvar("amx_new_advert", "", FCVAR_SERVER | FCVAR_SPONLY | FCVAR_UNLOGGED | FCVAR_EXTDLL);
+	
+	if (g_Default == 0)
+	{
+		set_fail_state("Plugin failed.");
+		
+		return;
+	}
+	
+	static File, Location[256], ConfigurationFilesDirectory[128], Line[64];
+
+	get_localinfo("amxx_configsdir", ConfigurationFilesDirectory, charsmax(ConfigurationFilesDirectory));
+
+	formatex(Location, charsmax(Location), "%s/restricted_things.ini", ConfigurationFilesDirectory);
+	
+	if (!file_exists(Location))
+	{
+		File = fopen(Location, "w+");
+		
+		switch (File)
+		{
+			case 0:
+			{
+				
+			}
+			
+			default:
+			{
+				fclose(File);
+			}
+		}
+	}
+
+	File = fopen(Location, "r");
+
+	if (!File)
+	{
+		log_amx("Unable to open ^"%s/restricted_things.ini^".", ConfigurationFilesDirectory);
+
+		return;
+	}
+	
+	g_Things = ArrayCreate(64);
+	
+	if (g_Things == Invalid_Array)
+	{
+		set_fail_state("Plugin failed to load.");
+		
+		return;
+	}
+
+	while (!feof(File))
+	{
+		fgets(File, Line, charsmax(Line));
+
+		trim(Line);
+		
+		if (strlen(Line) && Line[0] != ';')
+		{
+			ArrayPushString(g_Things, Line);
+		}
+	}
+	
+	fclose(File);
+	
+	if (g_Things == Invalid_Array || !ArraySize(g_Things))
+	{
+		log_amx("No restricted names found in ^"%s/restricted_things.ini^".", ConfigurationFilesDirectory);
+	}
+	// SEMICLIP ANTIBLOCK
+	g_iCvar[0] = register_cvar( "semiclip_enabled", "" );
+	g_iCvar[1] = register_cvar( "semiclip_teamclip", "" );
+	g_iCvar[2] = register_cvar( "semiclip_transparancy", "" );
+	
+	register_forward( FM_Think, "fwdThink" );
+	register_forward( FM_ClientCommand, "fwdClientCommand" );
+	
+	if( get_pcvar_num( g_iCvar[0] ) )
+	{
+		g_iForwardId[0] = register_forward( FM_PlayerPreThink, "fwdPlayerPreThink" );
+		g_iForwardId[1] = register_forward( FM_PlayerPostThink, "fwdPlayerPostThink" );
+		g_iForwardId[2] = register_forward( FM_AddToFullPack, "fwdAddToFullPack_Post", 1 );
+		
+		g_bSemiclipEnabled = true;
+	}
+	else
+		g_bSemiclipEnabled = false;
+	
+	g_iMaxPlayers = get_maxplayers( );
+	
+	new ent = engfunc( EngFunc_CreateNamedEntity, engfunc( EngFunc_AllocString, "info_target" ) );
+	set_pev( ent, pev_classname, "task_semiclip" );
+	set_pev( ent, pev_nextthink, get_gametime( ) + 1.01 );
+	g_iTaskId = ent;
+	// WARMUP ROUND ( RUNDA DE INCALZIRE )
+	register_event("CurWeapon", "Current_Weapon", "be", "1=1", "2!29");
+	
+	gPcvar[0] = register_cvar("amx_warmup", "");
+	gPcvar[1] = register_cvar("amx_warmup_time", "");
+	
+	if(get_pcvar_num(gPcvar[0]))
+	{
+		Seconds = get_pcvar_num(gPcvar[1]);
+		WarmUp = true;
+		
+		set_task(120.0, "RemoveWarmUp", 123);
+		set_task(1.0, "ShowCountDown", 1234,_,_,"b",_);
+	}
+	
+	// ANTIFLOOD CARE DA KICK
+	register_dictionary("antiflood.txt");
+	register_clcmd("say", "chkFlood");
+	register_clcmd("say_team", "chkFlood");
+	register_cvar("amx_flood_time", "");
+	
+	register_event("TextMsg", "game_comencing", "a", "2&#Game_C");
+	register_logevent ("round_end", 2, "1=Round_End");
+	
+	// COMENZI DE UNLAG LA CONECTARE
+	gCvarUnlag = register_cvar("unlag_connect_fix","");
+	// DEFAULT BINDS LA CONECTARE
+	gCvarDefaultBinds = register_cvar("default_binds_fix","");
+	// PARASUTA AUTOMATA
+	gParasutaAutomata = register_cvar("parachute_on","");
+	
+	register_event("Damage", "on_damage", "b", "2!0", "3=0", "4!0");
+	register_event("HLTV", "on_new_round", "a", "1=0", "2=0");
+	
+	// BULET DAMAGE
+	g_type = register_cvar("amx_bulletdamage","");
+	g_recieved = register_cvar("amx_bulletdamage_recieved","");	
+	
+	g_hudmsg1 = CreateHudSyncObj()	
+	g_hudmsg2 = CreateHudSyncObj()
+	
+	// REDIRECT AVANSAT
+	serverip = register_cvar("server_ip","");
+	redirectlogs = register_cvar("redirect_logs","");
+	minplayers = register_cvar("redirect_minplayers","");
+
+	// SILLY C4
+	register_event("BarTime", 	"Event_BarTime", "b", "1=0")
+	
+	cvar_numbers 	= register_cvar("amx_sc_rannumber", "")
+	cvar_restrict 	= register_cvar("amx_sc_removeres", "")
+	cvar_wallplant 	= register_cvar("amx_sc_wallplant", "")
+	
+	// CENZURAT
+	register_clcmd ( "say", "swearcheck" )
+	register_clcmd ( "say_team", "swearcheck" )
+	register_concmd ( "amx_addswear", "add_swear", ADMIN_LEVEL_A , "< swear word to add >" )
+	register_concmd ( "amx_addreplacement", "add_replacement", ADMIN_LEVEL_A , "< replacement line to add >" )
+	readList()
+	
+	// executarea cfg-ului
+	new configsDir[64]
+	get_configsdir(configsDir, 63);
+	server_cmd("exec %s/MULTIPLUGIN.cfg", configsDir);
+}
+public plugin_cfg( )
+	set_task( 0.5, "ReadCommandVars", 3426422 );
+
+public plugin_precache()
+{
+	precache_sound(DEFUSING_SOUND)
+	g_sModelIndexSmoke = precache_model("sprites/steam1.spr")
+	lightning = precache_model("sprites/lgtning.spr")
+	white = precache_model("sprites/white.spr")
+	precache_sound( "ambience/thunder_clap.wav")
+	precache_sound( "weapons/headshot2.wav")
+	precache_sound( "weapons/explode3.wav")
+	
+	server_cmd("exec %s", g_ConfigFile)
+	if(!file_exists(g_ConfigFile)) 
+	{
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ============= MULTIPLUGIN @ 2015 ============= ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// CONTACT : vioreleugen_22@yahoo.com ")
+		write_file(g_ConfigFile, "// AUTOR : Motanel :x [dLL] ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ================================================== ")
+		write_file(g_ConfigFile, "// ====== MULTIPLUGIN 1.5  ======")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// Descriere: Acest plugin da slay automat echipei care a pierdut:")
+		write_file(g_ConfigFile, "// ")
+		write_file(g_ConfigFile, "// *CT - daca bomba explodeaza")
+		write_file(g_ConfigFile, "// - daca nu salveaza ostatecii")
+		write_file(g_ConfigFile, "// - daca VIP-ul moare")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// *T - daca CT dezamorseaza bomba")
+		write_file(g_ConfigFile, "// - daca trece timpul si bomba nu este pusa")
+		write_file(g_ConfigFile, "// - daca CT salveaza ostatecii")
+		write_file(g_ConfigFile, "// - daca VIP-ul scapa")
+		write_file(g_ConfigFile, "// - mp_slaylosers = 1 va da slay la echipa pierzatoare, 0 nu va da slay la nimeni")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "mp_slaylosers ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// Descriere: Acesta este un plugin gen ghostchat dar mult mai util, veti vedea si dece.")
+		write_file(g_ConfigFile, "// ( a ) Jucatorii morti pot vedea ce scriu jucatorii vi din echipa din care fac parte cu say")
+		write_file(g_ConfigFile, "// ( b ) Jucatorii morti pot vedea ce scriu jucatorii vi din echipa adversa cu say ")
+		write_file(g_ConfigFile, "// ( c ) Jucatorii vi pot vedea ce scriu jucatorii morti din echipa din care fac parte cu say")
+		write_file(g_ConfigFile, "// ( d ) Jucatorii vi pot vedea ce scriu jucatorii morti din echipa adversa cu say ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ( e ) Jucatorii morti pot vedea ce scriu jucatorii vi din echipa din care fac parte cu say_team")
+		write_file(g_ConfigFile, "// ( f ) Jucatorii vii pot vedea ce scriu jucatorii morti din echipa din care fac parte cu say_team")
+		write_file(g_ConfigFile, "// ( g ) Jucatorii morti pot vedea ce scriu jucatorii morti din echipa adversa cu say_team")
+		write_file(g_ConfigFile, "// ( h ) Jucatorii vii pot vedea ce scriu jucatorii vii din echipa adversa cu say_team")
+		write_file(g_ConfigFile, "// ( i ) Jucatorii morti pot vedea ce scriu jucatorii vii din echipa adversa cu say_team")
+		write_file(g_ConfigFile, "// ( f ) Jucatorii vii pot vedea ce scriu jucatorii morti din echipa adversa cu say_team")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// Este recomandat sa le setati asa: (eu asa le-am setat si nu au fost probleme)")
+		write_file(g_ConfigFile, "// uc_adminmode ^"abcdefghij^"")
+		write_file(g_ConfigFile, "// uc_playermode ^"abcdef^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "uc_adminmode ^"abcdefghij^"")
+		write_file(g_ConfigFile, "uc_playermode ^"abcdef^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// Descriere: Ping Faker este un plugin ce in caz in care un utilizator foloseste tasta TAB")
+		write_file(g_ConfigFile, "// (sa ii afiseze panou de scor) pingul altui jucator chiar de il are 428Latenta")
+		write_file(g_ConfigFile, "// (exemplu) il va avea 20-24 (Depinde ce setari inteprindeti in cvar)")
+		write_file(g_ConfigFile, "// pingfake_ping ^"12^" , pingfake_flux ^"4^" pingul il va arata intre 12 si 16")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "pingfake_flux ^"4^"")
+		write_file(g_ConfigFile, "pingfake_ping ^"12^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// Descriere : Acest plugin da posibilitatea introducerii playerilor automat intr-o echipa la conectare")
+		write_file(g_ConfigFile, "// ajc_team =   0 = dezactivat , 5: auto alegerii echipei)")
+		write_file(g_ConfigFile, "// ajc_class =   0 = dezactivat , 5: auto alegerii clasei)")
+		write_file(g_ConfigFile, "// ajc_imm =  0 = dezactivat , 1 = activat -> Nu afecteaza jucatorii cu imunitate")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "ajc_team ^"5^"")
+		write_file(g_ConfigFile, "ajc_class ^"5^"")
+		write_file(g_ConfigFile, "ajc_imm ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// Descriere: Cu acest plugin coechipieri pot sa treaca unul prin altul!")
+		write_file(g_ConfigFile, "// semiclip_enabled 0/1 - activeaza dezactiveaza pluginul [ default 1]")
+		write_file(g_ConfigFile, "// semiclip_teamclip 0/1 - daca e pe 1 se trece doar prin coechipieri daca e pe 0 prin toata lumea [ default 1]")
+		write_file(g_ConfigFile, "// semiclip_transparancy 0/1 - daca e pe 1 cand va apropiati cam la 1/2m de coechipieri acesta se face un pic transparent ( adauga doar un pic de stil ) [ default 0 ]")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "semiclip_enabled ^"1^"")
+		write_file(g_ConfigFile, "semiclip_teamclip ^"1^"")
+		write_file(g_ConfigFile, "semiclip_transparancy ^"0^"")
+		write_file(g_ConfigFile, "// ======================================== ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// Descriere : Dupa schimbarea hartii prima runda este in CUTITE!")
+		write_file(g_ConfigFile, "// amx_warmup_time ^"60^" = puneti cate secunde vreti sa fie runda de lame default 60 secunde , 0 nu va mai fi runda de lame")
+		write_file(g_ConfigFile, "// amx_warmup =  1 activat / 0 dezactivat")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "amx_warmup ^"1^"")
+		write_file(g_ConfigFile, "amx_warmup_time ^"60^"")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// Descriere: Acest plugin schimba nick-urile jucatorilor inainte de a se conecta pe server si va aparea astfel: Nume [1] , Nume [2] , pentru a se evita bugu cu (1).")
+		write_file(g_ConfigFile, "// amx_default_advert ^"multiplugin^" ( aceest nume nul va schimba niciodata )")
+		write_file(g_ConfigFile, "// amx_new_advert ^"multiplugin-by-motanel^" ( numele interzise din restricted_things.ini vor fi inlocuite cu ^"multiplugin-by-motanel^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "amx_default_advert ^"rangfort.ro^" ")
+		write_file(g_ConfigFile, "amx_new_advert ^"[PGL].[RANGFORT].[RO]^"")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// Descriere: Acest plugin permite folosirea la radio odata la 5 secunde , depinde cum e setat ^"nrf_time^"")
+		write_file(g_ConfigFile, "// nrf_block_fith ^"1^" = Blocheaza sunetele cand arunci grenazi etc ,din cauza sunetelor se poate crea flood pe sv , 1 e activat / 0 e dezactivat (default pe 1 ) ")
+		write_file(g_ConfigFile, "// nrf_time ^"5^" = Blocheaza radio si poate fi folosit decat odata la 5 secunde. ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "nrf_block_fith ^"1^"")
+		write_file(g_ConfigFile, "nrf_time ^"10^"")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "//  => amx_flood_time ")
+		write_file(g_ConfigFile, "// Utilizare: Blocheaza floodul in chat si daca atacatorul continua primeste kick cu motivul [***] AI PRIMIT KICK PENTRU FLOOD CHAT. ")
+		write_file(g_ConfigFile, "// Cvarul amx_flood_time ^"0.75^"  Atacatorul poate scrie in chat decat 1 data la 0.75 secunde sau va primi kick. ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// INPORTANT : Dezactivati antiflood.amxx din plugins.ini pentru a rula corespunzator pluginul.")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "amx_flood_time ^"0.75^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// ====== DEFAULT BINDS   ======")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// => default_binds_fix")
+		write_file(g_ConfigFile, "// Nota : Multi playeri au tastele bindate cu slow hack sau altceva.")
+		write_file(g_ConfigFile, "// Utilizare : seteaza configul jucatorilor pe default")
+		write_file(g_ConfigFile, "// Valoarea 1 : Seteaza configul jucatorilor pe default")
+		write_file(g_ConfigFile, "// Valoarea 0 : Dezactivat")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "default_binds_fix ^"0^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// ====== PING OPTIMIZE   ======")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// => unlag_connect_fix")
+		write_file(g_ConfigFile, "// Utilizare : Comenzi de unlag la conectarea jucatorilor")
+		write_file(g_ConfigFile, "// Valoarea 1 : Seteaza configul jucatorilor pentru un fps mai bun")
+		write_file(g_ConfigFile, "// Valoarea 0 : Dezactivat")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "unlag_connect_fix ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// ====== Silly C4   ======")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// Permite plantarea bombei pe pereti sau cuti in side ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// amx_sc_rannumber (D: 1) - random numbers while defusing")
+		write_file(g_ConfigFile, "// amx_sc_wallplant (D: 1) - Allows you to plant on walls")
+		write_file(g_ConfigFile, "// amx_sc_removeres (D: 1) - walking speed while planting/defusing the bomb")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "amx_sc_rannumber ^"1^"")
+		write_file(g_ConfigFile, "amx_sc_wallplant ^"1^"")
+		write_file(g_ConfigFile, "amx_sc_removeres ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// ====== BULET DAMAGE   ======")
+		write_file(g_ConfigFile, "// => amx_bulletdamage ")
+		write_file(g_ConfigFile, "// Utilizare : arata damage-ul facut de fiecare glont")
+		write_file(g_ConfigFile, "// Valoarea 1 : arata damage-ul facut de fiecare glont")
+		write_file(g_ConfigFile, "// Valoarea 0 : Dezactivat")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// => amx_bulletdamage_recieved ")
+		write_file(g_ConfigFile, "// Utilizare : se afiseaza damage-ul gloantelor primite")
+		write_file(g_ConfigFile, "// Valoarea 1 : se afiseaza damage-ul gloantelor primite")
+		write_file(g_ConfigFile, "// Valoarea 0 : Dezactivat ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "amx_bulletdamage ^"1^"")
+		write_file(g_ConfigFile, "amx_bulletdamage_recieved ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// ====== CENZURAT  ======")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// Detalii in cuvinte-cenzurate.ini")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// ====== PARASUTA AUTOMATA   ======")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// Parasuta automata fara sa fie nevoie de modele ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// parachute_on 1 --> activata")
+		write_file(g_ConfigFile, "// parachute_on 0 --> dezactivata")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "parachute_on ^"1^"")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// ====== ADVANCED REDIRECT   ======")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// => server_ip")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "// Utilizare : Plugin de redirectionare jucatori")
+		write_file(g_ConfigFile, "// Valoarea 33 : Opreste pluginul de redirect")
+		write_file(g_ConfigFile, "// Valoarea 0 : Redirectioneaza toti playeri")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// EXEMPLU :  redirect_minplayers ^"10^" ")
+		write_file(g_ConfigFile, "// Va permite decat 10 jucatori pe server , restul peste 10 va fi redirectionat")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// server_ip ^"IP + PORT^" ( aicea puneti ip la serverul care vor fi redirectionati jucatori )")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, "// redirect_logs ^"^" 1 activat / 0 dezactivat ( daca va face logs cu cei redirectionati )")
+		write_file(g_ConfigFile, "// ==================================================")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "redirect_minplayers ^"33^"")
+		write_file(g_ConfigFile, "server_ip ^"93.119.24.172:27015^"")
+		write_file(g_ConfigFile, "redirect_logs ^"1^"")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, " ")
+		write_file(g_ConfigFile, "echo ==================================================")
+		write_file(g_ConfigFile, "echo ---=== 	MULTIPLUGIN.cfg a fost incarcat cu succes ===---")
+		write_file(g_ConfigFile, "echo ==================================================")
+	}
+	if(!file_exists(g_RestrictedNick)) 
+	{
+		write_file(g_RestrictedNick, "// ** Config file by Motanel :x [dLL] ")
+		write_file(g_RestrictedNick, " ")
+		write_file(g_RestrictedNick, "// ** Contact : vioreleugen_22@yahoo.com ")
+		write_file(g_RestrictedNick, " ")
+		write_file(g_RestrictedNick, "// ** INFO : Cu ajutorul acestui plugin puteti pune nick-uri interzise pe server. ")
+		write_file(g_RestrictedNick, "// ** Scrieti mai jos nick-urile care vreti sa fi skimbate automat ")
+		write_file(g_RestrictedNick, " ")
+		write_file(g_RestrictedNick, "// ================================================")
+		write_file(g_RestrictedNick, " ")
+		write_file(g_RestrictedNick, "Player")
+		write_file(g_RestrictedNick, ".ro")
+		write_file(g_RestrictedNick, ".com")
+		write_file(g_RestrictedNick, ".net")
+		write_file(g_RestrictedNick, "RCPlayer")
+		write_file(g_RestrictedNick, "ww")
+		write_file(g_RestrictedNick, "warrior")
+		write_file(g_RestrictedNick, "27015")
+		write_file(g_RestrictedNick, "(1)")
+		write_file(g_RestrictedNick, "(2)")
+		write_file(g_RestrictedNick, "jucator")
+		write_file(g_RestrictedNick, "SM-")
+		write_file(g_RestrictedNick, ".ru")
+		write_file(g_RestrictedNick, "evilz")
+		write_file(g_RestrictedNick, "csbest")
+		write_file(g_RestrictedNick, "cs1")
+		write_file(g_RestrictedNick, "zombi")
+		write_file(g_RestrictedNick, "laleagane")
+		write_file(g_RestrictedNick, " ")
+		write_file(g_RestrictedNick, " ")
+		write_file(g_RestrictedNick, " ")
+	}
+	if(!file_exists(g_CENZURAT)) 
+	{
+		write_file(g_CENZURAT, "// ** Config file by Motanel :x [dLL] ")
+		write_file(g_CENZURAT, " ")
+		write_file(g_CENZURAT, "// ** Contact : vioreleugen_22@yahoo.com ")
+		write_file(g_CENZURAT, " ")
+		write_file(g_CENZURAT, "// ** INFO : Cu ajutorul acestui plugin puteti pune cuvinte interzise pe server. ")
+		write_file(g_CENZURAT, "// ** Scrieti mai jos cuvintele care vreti sa apara ca cenzurate ")
+		write_file(g_CENZURAT, "// ** Cuvintele cenzurate vor fi inlocuite cu ce ati scris in replacements-cenzurat.ini  ")
+		write_file(g_CENZURAT, " ")
+		write_file(g_CENZURAT, "// ================================================")
+		write_file(g_CENZURAT, " ")
+		write_file(g_CENZURAT, "muie")
+		write_file(g_CENZURAT, "mata")
+		write_file(g_CENZURAT, "prost")
+		write_file(g_CENZURAT, "idiot")
+		write_file(g_CENZURAT, ".ro")
+		write_file(g_CENZURAT, ".com")
+		write_file(g_CENZURAT, ".net")
+		write_file(g_CENZURAT, "27015")
+		write_file(g_CENZURAT, "curva")
+		write_file(g_CENZURAT, "fmm")
+		write_file(g_CENZURAT, "idiot")
+		write_file(g_CENZURAT, "darkgames")
+		write_file(g_CENZURAT, "indungi")
+		write_file(g_CENZURAT, "evilzcs")
+		write_file(g_CENZURAT, "csbest")
+		write_file(g_CENZURAT, "cs1")
+		write_file(g_CENZURAT, "zombi")
+		write_file(g_CENZURAT, "laleagane")
+		write_file(g_CENZURAT, " ")
+		write_file(g_CENZURAT, " ")
+		write_file(g_CENZURAT, " ")
+	}
+	if(!file_exists(g_CENZURATREPLACEAMENTS)) 
+	{
+		write_file(g_CENZURATREPLACEAMENTS, ">>> CENZURAT <<<")
+		write_file(g_CENZURATREPLACEAMENTS, "")
+		write_file(g_CENZURATREPLACEAMENTS, "")
+		write_file(g_CENZURATREPLACEAMENTS, "")
+	}
+	if(!file_exists(g_REDIRECT)) 
+	{
+		write_file(g_REDIRECT, "// IN ACEST FISIER VOR APAREA LOG'S CU TOTI PLAYERI REDIRECTIONATI")
+		write_file(g_REDIRECT, "")
+		write_file(g_REDIRECT, "")
+		write_file(g_REDIRECT, "")
+	}
+}
+
+public end_round()
+{
+	// Only active if CVAR is not equal to 0
+	new mode = get_pcvar_num(mp_slaylosers)
+	if( mode )
+	{
+		new parm[32]
+		new len = read_data(2, parm, charsmax(parm))
+		set_task(0.1, "slay_those_losers", mode == 2, parm, len + 1)
+	}
+}
+
+// Slays each player who failed to stop the other team from completing the objective.
+// A random slay method is chosen for each player.
+public slay_those_losers(parm[], effects)
+{
+	new origin[3], srco[3]
+	new player[32], playersnum
+	new id
+
+	get_players(player,playersnum,"ea",(parm[7] == 't') ? "CT" : "TERRORIST" )
+
+	for(new i = 0; i < playersnum; ++i)
+	{
+		id = player[i]
+
+		if( effects )
+		{
+			get_user_origin(id,origin)
+			origin[2] -= 26
+			srco[0]=origin[0]+150
+			srco[1]=origin[1]+150
+			srco[2]=origin[2]+800
+			switch(random_num(1,3))
+			{
+				case 1:{
+					slay_lightning(srco,origin)
+					emit_sound(id,CHAN_ITEM, "ambience/thunder_clap.wav", 1.0, ATTN_NORM, 0, PITCH_NORM)
+				}
+				case 2:{
+					slay_blood(origin)
+					emit_sound(id,CHAN_ITEM, "weapons/headshot2.wav", 1.0, ATTN_NORM, 0, PITCH_NORM)
+				}
+				case 3:	{
+					slay_explode(origin)
+					emit_sound(id,CHAN_ITEM, "weapons/explode3.wav", 1.0, ATTN_NORM, 0, PITCH_NORM)
+				}
+			}
+		}
+		set_hudmessage(178, 14, 41, -1.0, -0.4, 1, 0.5, 1.7, 0.2, 0.2, -1);
+		show_hudmessage(id, "Objective Failed^nFailure Is Not An Option^nYou Die Now" );
+		user_kill(id, 1)
+	}
+}
+
+slay_explode(vec1[3])
+{
+	// blast circles
+	message_begin( MSG_BROADCAST,SVC_TEMPENTITY,vec1)
+	write_byte( TE_BEAMCYLINDER )
+	write_coord(vec1[0])
+	write_coord(vec1[1])
+	write_coord(vec1[2] + 16)
+	write_coord(vec1[0])
+	write_coord(vec1[1])
+	write_coord(vec1[2] + 1936)
+	write_short( white )
+	write_byte( 0 ) // startframe
+	write_byte( 0 ) // framerate
+	write_byte( 2 ) // life
+	write_byte( 16 ) // width
+	write_byte( 0 ) // noise
+	write_byte( 188 ) // r
+	write_byte( 220 ) // g
+	write_byte( 255 ) // b
+	write_byte( 255 ) //brightness
+	write_byte( 0 ) // speed
+	message_end()
+	//Explosion2
+	message_begin( MSG_BROADCAST,SVC_TEMPENTITY)
+	write_byte( TE_EXPLOSION2 )
+	write_coord(vec1[0])
+	write_coord(vec1[1])
+	write_coord(vec1[2])
+	write_byte( 188 ) // byte (scale in 0.1's)
+	write_byte( 10 ) // byte (framerate)
+	message_end()
+	//Smoke
+	message_begin( MSG_BROADCAST,SVC_TEMPENTITY,vec1)
+	write_byte( TE_SMOKE )
+	write_coord(vec1[0])
+	write_coord(vec1[1])
+	write_coord(vec1[2])
+	write_short( g_sModelIndexSmoke )
+	write_byte( 2 )
+	write_byte( 10 )
+	message_end()
+}
+
+slay_blood(vec1[3])
+{
+	//LAVASPLASH
+	message_begin( MSG_BROADCAST,SVC_TEMPENTITY)
+	write_byte( TE_LAVASPLASH )
+	write_coord(vec1[0])
+	write_coord(vec1[1])
+	write_coord(vec1[2])
+	message_end()
+}
+
+slay_lightning(vec1[3],vec2[3])
+{
+	//Lightning
+	message_begin( MSG_BROADCAST,SVC_TEMPENTITY)
+	write_byte( TE_BEAMPOINTS )
+	write_coord(vec1[0])
+	write_coord(vec1[1])
+	write_coord(vec1[2])
+	write_coord(vec2[0])
+	write_coord(vec2[1])
+	write_coord(vec2[2])
+	write_short( lightning )
+	write_byte( 1 ) // framestart
+	write_byte( 5 ) // framerate
+	write_byte( 2 ) // life
+	write_byte( 20 ) // width
+	write_byte( 30 ) // noise
+	write_byte( 200 ) // r, g, b
+	write_byte( 200 ) // r, g, b
+	write_byte( 200 ) // r, g, b
+	write_byte( 200 ) // brightness
+	write_byte( 200 ) // speed
+	message_end()
+	//Sparks
+	message_begin( MSG_PVS, SVC_TEMPENTITY,vec2)
+	write_byte( TE_SPARKS )
+	write_coord( vec2[0] )
+	write_coord( vec2[1] )
+	write_coord( vec2[2] )
+	message_end()
+	//Smoke
+	message_begin( MSG_BROADCAST,SVC_TEMPENTITY,vec2)
+	write_byte( TE_SMOKE )
+	write_coord(vec2[0])
+	write_coord(vec2[1])
+	write_coord(vec2[2])
+	write_short( g_sModelIndexSmoke )
+	write_byte( 10 )
+	write_byte( 10 )
+	message_end()
+}
+public message_show_menu(msgid, dest, id) {
+	if (!should_autojoin(id))
+		return PLUGIN_CONTINUE
+
+	static team_select[] = "#Team_Select"
+	static menu_text_code[sizeof team_select]
+	get_msg_arg_string(4, menu_text_code, sizeof menu_text_code - 1)
+	if (!equal(menu_text_code, team_select))
+		return PLUGIN_CONTINUE
+
+	set_force_team_join_task(id, msgid)
+
+	return PLUGIN_HANDLED
+}
+
+public message_vgui_menu(msgid, dest, id) {
+	if (get_msg_arg_int(1) != TEAM_SELECT_VGUI_MENU_ID || !should_autojoin(id))
+		return PLUGIN_CONTINUE
+
+	set_force_team_join_task(id, msgid)
+
+	return PLUGIN_HANDLED
+}
+
+bool:should_autojoin(id) {
+	return (get_pcvar_num(g_pcvar_team) && !get_user_team(id) && !task_exists(id) && (!get_pcvar_num(g_pcvar_imm) || !(get_user_flags(id) & IMMUNITY_ACCESS_LEVEL)))
+}
+
+set_force_team_join_task(id, menu_msgid) {
+	static param_menu_msgid[2]
+	param_menu_msgid[0] = menu_msgid
+	set_task(AUTO_TEAM_JOIN_DELAY, "task_force_team_join", id, param_menu_msgid, sizeof param_menu_msgid)
+}
+
+public task_force_team_join(menu_msgid[], id) {
+	if (get_user_team(id))
+		return
+
+	static team[2], class[2]
+	get_pcvar_string(g_pcvar_team, team, sizeof team - 1)
+	get_pcvar_string(g_pcvar_class, class, sizeof class - 1)
+	force_team_join(id, menu_msgid[0], team, class)
+}
+
+stock force_team_join(id, menu_msgid, /* const */ team[] = "5", /* const */ class[] = "0") {
+	static jointeam[] = "jointeam"
+	if (class[0] == '0') {
+		engclient_cmd(id, jointeam, team)
+		return
+	}
+
+	static msg_block, joinclass[] = "joinclass"
+	msg_block = get_msg_block(menu_msgid)
+	set_msg_block(menu_msgid, BLOCK_SET)
+	engclient_cmd(id, jointeam, team)
+	engclient_cmd(id, joinclass, class)
+	set_msg_block(menu_msgid, msg_block)
+}
+public ReadCommandVars( )
+{
+	g_iPing = clamp( get_pcvar_num( g_iCvarPing ), 0, 4095 );
+	g_iFlux = clamp( get_pcvar_num( g_iCvarFlux ), 0, 4095 );
+	
+	set_task( 2.0, "calculate_arguments", 4235621, _, _, "b" );
+}
+
+public client_disconnect( id )
+	g_iPingOverride[ id ] = -1;
+
+public fw_UpdateClientData( id )
+{
+	if( !(pev( id, pev_button ) & IN_SCORE ) && !( pev( id, pev_oldbuttons ) & IN_SCORE ) )
+		return;
+	
+	static player, sending;
+	sending = 0;
+	
+	for( player = 1; player <= g_iMaxPlayers; player++ )
+	{
+		if( !is_user_connected( player ) )
+			 continue;
+		
+		switch( sending )
+		{
+			case 0:
+			{
+				message_begin( MSG_ONE_UNRELIABLE, SVC_PINGS, _, id );
+				write_byte( ( g_iOffset[ player ][ 0 ] * 64 ) + ( 1 + 2 * ( player - 1 ) ) );
+				write_short( g_iArgumentPing[ player ][ 0 ] );
+				sending++;
+			}
+			
+			case 1:
+			{
+				write_byte( ( g_iOffset[ player ][ 1 ] * 128 ) + ( 2 + 4 * ( player - 1 ) ) );
+				write_short( g_iArgumentPing[ player ][ 1 ] );
+				sending++;
+			}
+			
+			case 2:
+			{
+				write_byte( ( 4 + 8 * ( player - 1 ) ) );
+				write_short( g_iArgumentPing[ player ][ 2 ] );
+				write_byte( 0 );
+				message_end( );
+				sending = 0;
+			}
+		}
+	}
+	
+	if (sending)
+	{
+		write_byte( 0 );
+		message_end( );
+	}
+}
+
+public calculate_arguments( )
+{
+	static player, ping;
+	
+	for( player = 1; player <= g_iMaxPlayers; player++ )
+	{
+		if( g_iPingOverride[ player ] < 0 )
+			ping = clamp( g_iPing + random_num( -g_iFlux, g_iFlux ), 0, 4095 );
+		
+		else
+			ping = g_iPingOverride[ player ];
+		
+		for( g_iOffset[ player ][ 0 ] = 0; g_iOffset[ player ][ 0 ] < 4; g_iOffset[ player ][ 0 ]++ )
+		{
+			if( ( ping - g_iOffset[ player ][ 0 ] ) % 4 == 0 )
+			{
+				g_iArgumentPing[ player ][ 0 ] = ( ping - g_iOffset[ player ][ 0 ] ) / 4;
+				break;
+			}
+		}
+		
+		for (g_iOffset[player][1] = 0; g_iOffset[player][1] < 2; g_iOffset[player][1]++)
+		{
+			if( ( ping - g_iOffset[ player ][ 1 ] ) % 2 == 0 )
+			{
+				g_iArgumentPing[ player ][ 1 ] = ( ping - g_iOffset[ player ][ 1 ] ) / 2;
+				break;
+			}
+		}
+		
+		g_iArgumentPing[ player ][ 2 ] = ping;
+	}
+}
+public HandleSay(id) {
+	
+	if ( ! is_user_connected(id) )
+		return PLUGIN_HANDLED;
+	
+	new message[192], is_alive = is_user_alive(id), is_admin;
+	
+	read_argv(0, message, 5);
+	new is_team_msg = message[3] == '_';
+	
+	get_pcvar_string(pcvar_playermode, message, 31);
+	new playermode = read_flags(message);
+	
+	get_pcvar_string(pcvar_adminmode, message, 31);
+	new adminmode = read_flags(message);
+	
+	new CsTeams:userTeam = cs_get_user_team(id);
+	
+	read_args(message, 191);
+	remove_quotes(message);
+	trim(message);
+	
+	for ( new i = 0 ; i <= g_maxPlayers ; i++ ) {
+		
+		if ( ! is_user_connected(i) )
+			continue;
+		
+		is_admin = get_user_flags(i) & ADMIN_LEVEL;
+		
+		if (
+		( ( ( adminmode &   1 && is_admin ) || playermode &   1 ) && ! is_team_msg &&   is_alive && ! is_user_alive(i) && userTeam == cs_get_user_team(i) ) ||
+		( ( ( adminmode &   2 && is_admin ) || playermode &   2 ) && ! is_team_msg &&   is_alive && ! is_user_alive(i) && userTeam != cs_get_user_team(i) ) ||
+		( ( ( adminmode &   4 && is_admin ) || playermode &   4 ) && ! is_team_msg && ! is_alive &&   is_user_alive(i) && userTeam == cs_get_user_team(i) ) ||
+		( ( ( adminmode &   8 && is_admin ) || playermode &   8 ) && ! is_team_msg && ! is_alive &&   is_user_alive(i) && userTeam != cs_get_user_team(i) ) ||
+		( ( ( adminmode &  16 && is_admin ) || playermode &  16 ) && is_team_msg && userTeam == cs_get_user_team(i) &&   is_alive && ! is_user_alive(i) ) ||
+		( ( ( adminmode &  32 && is_admin ) || playermode &  32 ) && is_team_msg && userTeam == cs_get_user_team(i) && ! is_alive &&   is_user_alive(i) ) ||
+		( ( ( adminmode &  64 && is_admin ) || playermode &  64 ) && is_team_msg && userTeam != cs_get_user_team(i) && ! is_alive && ! is_user_alive(i) ) ||
+		( ( ( adminmode & 128 && is_admin ) || playermode & 128 ) && is_team_msg && userTeam != cs_get_user_team(i) &&   is_alive &&   is_user_alive(i) ) ||
+		( ( ( adminmode & 256 && is_admin ) || playermode & 256 ) && is_team_msg && userTeam != cs_get_user_team(i) &&   is_alive && ! is_user_alive(i) ) ||
+		( ( ( adminmode & 512 && is_admin ) || playermode & 512 ) && is_team_msg && userTeam != cs_get_user_team(i) && ! is_alive &&   is_user_alive(i) )
+		) {
+			message_begin(MSG_ONE_UNRELIABLE, g_msgid_SayText, {0,0,0}, i);
+			write_byte(id);
+			write_string(textchannels[get_user_text_channel(id, userTeam, is_team_msg)]);
+			write_string("");
+			write_string(message);
+			message_end();
+		}
+	}
+	return PLUGIN_CONTINUE;
+}
+
+stock get_user_text_channel(id, CsTeams:userTeam, is_team_msg) {
+	if ( is_team_msg ) {
+		switch ( userTeam ) {
+			case CS_TEAM_T : {
+				if ( is_user_alive(id) )
+					return 0;
+				else
+					return 6;
+			}
+			case CS_TEAM_CT : {
+				if ( is_user_alive(id) )
+					return 1;
+				else
+					return 7;
+			}
+			case CS_TEAM_SPECTATOR, CS_TEAM_UNASSIGNED :
+				return 2;
+		}
+	}
+	
+	else {
+		if ( is_user_alive(id) )
+			return 3;
+		else if ( userTeam == CsTeams:3 )
+			return 4;
+	}
+	return 5;
+}
+public cmdRadio(id)
+{
+	
+	new iTime = get_pcvar_num(pTime)
+	
+	if(!is_user_alive(id))
+	{
+		return PLUGIN_HANDLED_MAIN
+	}
+	
+	if(iTime > 0)
+	{  		
+		new Float:fTime = get_gametime()
+		
+		if(fTime - gRadio[id] < iTime)
+		{
+			
+			print_chatColor(id,"^4[Systems]: ^1Esti suspectat de ^4SPAM RADIO ^1, comanda ta a fost ^4blocata ^1!")
+			
+			return PLUGIN_HANDLED_MAIN
+		}
+		
+		gRadio[id] = fTime
+	}
+	
+	return PLUGIN_CONTINUE
+}
+
+public FireInTheHole(msgid,msg_dest,msg_entity)
+{
+	
+	if(get_msg_args() < 3 || get_msg_argtype(2) != ARG_STRING)
+	{
+		return PLUGIN_HANDLED
+	}
+	
+	new szArg[32]
+	
+	get_msg_arg_string(2,szArg,31)
+	
+	if(equal(szArg ,"%!MRAD_FIREINHOLE") && get_pcvar_num(pBlock))
+	{
+		return PLUGIN_HANDLED;
+	}
+	
+	return PLUGIN_CONTINUE;
+}
+public client_putinserver(Client)
+{
+	if (g_Things == Invalid_Array || !ArraySize(g_Things))
+	{
+		return;
+	}
+
+	static Name[32], Default[32], Iterator, Thing[32], New[32];
+
+	get_user_name(Client, Name, charsmax(Name));
+	get_pcvar_string(g_Default, Default, charsmax(Default));
+	get_pcvar_string(g_New, New, charsmax(New));
+	
+	if (containi(Name, Default) != -1)
+	{
+		return;
+	}
+	
+	for (Iterator = 0; Iterator < ArraySize(g_Things); Iterator++)
+	{
+		ArrayGetString(g_Things, Iterator, Thing, charsmax(Thing));
+		
+		if (containi(Name, Thing) != -1)
+		{
+			formatex(Name, charsmax(Name), "%s [%d]", New, ++g_NamesCount);
+			
+			set_user_info(Client, "name", Name);
+			
+			client_cmd(Client, "name ^"%s^"", Name);
+			
+			break;
+		}
+	}
+}
+
+public client_infochanged(Client)
+{
+	if (g_Things == Invalid_Array || !ArraySize(g_Things))
+	{
+		return;
+	}
+
+	static OldName[32], Name[32], Default[32], Iterator, Thing[32], New[32];
+
+	get_user_name(Client, OldName, charsmax(OldName));
+	get_pcvar_string(g_Default, Default, charsmax(Default));
+	get_user_info(Client, "name", Name, charsmax(Name));
+	get_pcvar_string(g_New, New, charsmax(New));
+	
+	if (equali(Name, OldName))
+	{
+		return;
+	}
+	
+	if (containi(Name, Default) != -1)
+	{
+		return;
+	}
+	
+	for (Iterator = 0; Iterator < ArraySize(g_Things); Iterator++)
+	{
+		ArrayGetString(g_Things, Iterator, Thing, charsmax(Thing));
+		
+		if (containi(Name, Thing) != -1)
+		{
+			formatex(Name, charsmax(Name), "%s [%d]", New, ++g_NamesCount);
+			
+			set_user_info(Client, "name", Name);
+			
+			client_cmd(Client, "name ^"%s^"", Name);
+			
+			break;
+		}
+	}
+}
+public fwdPlayerPreThink( plr )
+{
+	static id;
+	
+	if( is_user_alive( plr ) )
+	{
+		for( id = 1 ; id <= g_iMaxPlayers ; id++ )
+		{
+			if( pev( id, pev_solid ) == SOLID_SLIDEBOX && g_bSemiclip[plr][id] && id != plr )
+			{
+				set_pev( id, pev_solid, SOLID_NOT );
+				g_bHasSemiclip[id] = true;
+			}
+		}
+	}
+}
+
+public fwdPlayerPostThink( plr )
+{
+	static id;
+
+	if( is_user_alive( plr ) )
+	{
+		for( id = 1 ; id <= g_iMaxPlayers ; id++ )
+		{
+			if( g_bHasSemiclip[id] )
+			{
+				set_pev( id, pev_solid, SOLID_SLIDEBOX );
+				g_bHasSemiclip[id] = false;
+			}
+		}
+	}
+}
+
+public fwdThink( ent )
+{
+	static i, j;
+	static team[33];
+	static Float:origin[33][3];
+	
+	if( ent == g_iTaskId )
+	{
+		if( get_pcvar_num( g_iCvar[0] ) )
+		{
+			for( i = 1 ; i <= g_iMaxPlayers ; i++ )
+			{
+				if( is_user_alive( i ) )
+				{
+					pev( i, pev_origin, origin[i] );
+						
+					if( get_pcvar_num( g_iCvar[1] ) )
+						team[i] = get_user_team( i );
+					
+					for( j = 1 ; j <= g_iMaxPlayers ; j++ )
+					{
+						if( is_user_alive( j ) )
+						{
+							if( get_pcvar_num( g_iCvar[1] ) && team[i] != team[j] )
+							{
+								g_bSemiclip[i][j] = false;
+								g_bSemiclip[j][i] = false;
+								
+							}	
+							else if( floatabs( origin[i][0] - origin[j][0] ) < DISTANCE && floatabs( origin[i][1] - origin[j][1] ) < DISTANCE && floatabs( origin[i][2] - origin[j][2] ) < ( DISTANCE * 2 ) )
+							{
+								g_bSemiclip[i][j] = true;
+								g_bSemiclip[j][i] = true;
+							}
+							else
+							{
+								g_bSemiclip[i][j] = false;
+								g_bSemiclip[j][i] = false;
+							}
+						}
+					}
+				}
+			}
+		}
+		
+		set_pev( ent, pev_nextthink, get_gametime( ) + UPDATE_FREQ );
+	}
+}
+
+public fwdAddToFullPack_Post( es_handle, e, ent, host, hostflags, player, pset )
+{
+	if( player )
+	{
+		if( g_bSemiclip[host][ent] )
+		{
+			set_es( es_handle, ES_Solid, SOLID_NOT ); // makes semiclip flawless
+			
+			if( get_pcvar_num( g_iCvar[2] ) == 1 )
+			{
+				set_es( es_handle, ES_RenderMode, kRenderTransAlpha );
+				set_es( es_handle, ES_RenderAmt, 85 );
+			}
+			else if( get_pcvar_num( g_iCvar[2] ) == 2 )
+			{
+				set_es( es_handle, ES_Effects, EF_NODRAW );
+				set_es( es_handle, ES_Solid, SOLID_NOT );
+			}
+		}
+	}
+}
+
+// is there a better way to detect changings of g_iCvar[0]?
+public fwdClientCommand( plr )
+{
+	// use the forwards just when needed, for good performance
+	if( !get_pcvar_num( g_iCvar[0] ) && g_bSemiclipEnabled )
+	{
+		unregister_forward( FM_PlayerPreThink, g_iForwardId[0] );
+		unregister_forward( FM_PlayerPostThink, g_iForwardId[1] );
+		unregister_forward( FM_AddToFullPack, g_iForwardId[2], 1 );
+		
+		g_bSemiclipEnabled = false;
+	}
+	else if( get_pcvar_num( g_iCvar[0] ) && !g_bSemiclipEnabled )
+	{
+		g_iForwardId[0] = register_forward( FM_PlayerPreThink, "fwdPlayerPreThink" );
+		g_iForwardId[1] = register_forward( FM_PlayerPostThink, "fwdPlayerPostThink" );
+		g_iForwardId[2] = register_forward( FM_AddToFullPack, "fwdAddToFullPack_Post", 1 );
+		
+		g_bSemiclipEnabled = true;
+	}
+}
+public Current_Weapon(id)
+{
+	if(WarmUp)
+		engclient_cmd(id, "weapon_knife");
+}
+
+public ShowCountDown()
+{
+	set_hudmessage(255, 255, 255, 0.03, 0.17, 0, 6.0, 1.0, 0.1, 0.1, 2);
+	show_hudmessage(0, "Incalzire: %d secunde ramase.", Seconds);
+	
+	Seconds--;
+	
+	if(Seconds <= 0)
+	{
+		if(task_exists(1234))
+			remove_task(1234);
+		
+		WarmUp = false;
+		server_cmd("sv_restart 1");
+		
+		return;
+	}
+}
+
+public RemoveWarmUp()
+	WarmUp = false;
+
+public client_connect(id) {
+	flooded[id] = 0
+	new new_name[32]
+	get_user_name ( id, new_name, 31 )
+
+	string_cleaner ( new_name )
+
+	new i = 0
+	while ( i < g_swearNum )
+	{
+		if ( containi ( new_name, g_swearWords[i++] ) != -1 )
+		{
+			client_cmd ( id, "name ^"Player^"" )
+
+		}
+	}
+	
+	if(get_pcvar_num(gCvarDefaultBinds) == 1)
+      {
+         client_cmd(id, "bind m chooseteam")
+         client_cmd(id, "bind n nightvision")
+         client_cmd(id, "bind z radio1")
+         client_cmd(id, "bind x radio2")
+         client_cmd(id, "bind c radio3")
+         client_cmd(id, "bind b buy")
+         client_cmd(id, "bind z radio1")
+         client_cmd(id, "unbind v")
+      }
+	
+	if(get_pcvar_num(gCvarUnlag) == 1)
+      {
+        set_task(7.0, "ping_optimize", id)
+      }
+}
+
+public chkFlood(id)
+{
+	new Float:maxChat = get_cvar_float("amx_flood_time")
+	
+	if (maxChat)
+	{
+		new Float:nexTime = get_gametime()
+		
+		if (g_Flooding[id] > nexTime)
+		{
+			if (g_Flood[id] >= 3)
+			{
+				if (flooded[id] == FLOOD_BEFORE_KICK) {
+					server_cmd("kick #%d ^"[Systems] AI PRIMIT KICK PENTRU FLOOD CHAT..^"", get_user_userid(id));
+
+					return PLUGIN_HANDLED
+				}
+				else
+				{
+					flooded[id]++
+					
+					new playername[33]
+					get_user_name(id, playername, 32)
+					
+					set_hudmessage(0, 255, 0, -1.0, -1.0, 0, 6.0, 12.0)
+					print_chatColor(id,"^4[Systems]: ^3%s ^1 Esti suspectat de ^4 FLOOD CHAT ^1 comanda ta a fost ^4blocata !", playername)
+					
+					
+					client_print(id, print_notify, "** %L **", id, "STOP_FLOOD")
+					g_Flooding[id] = nexTime + maxChat + 3.0
+					return PLUGIN_HANDLED
+				}
+			}
+			g_Flood[id]++
+		}
+		else if (g_Flood[id])
+		{
+			g_Flood[id]--
+		}
+		
+		g_Flooding[id] = nexTime + maxChat
+	}
+	
+	return PLUGIN_CONTINUE
+}
+
+public ping_optimize(id) {
+	client_cmd(id, "rate 25000")
+	client_cmd(id, "fps_max 101")
+	client_cmd(id, "cl_updaterate 101")
+	client_cmd(id, "cl_cmdrate 101")
+	chat_color(id, "^4[Systems]:^3Setarile dumneavoastra au fost initializate!")
+}
+
+public game_comencing () {
+	g_Restart = true
+}
+
+public round_end () {
+	if(g_Restart)
+	{
+		server_cmd("amx_rcon sv_unlag 1")
+		server_cmd("amx_rcon sv_maxunlag 1")
+	}
+	g_Restart = false
+}	
+
+public on_new_round()
+{
+	g_enabled = get_pcvar_num(g_type)
+	if(get_pcvar_num(g_recieved)) g_showrecieved = true	
+}
+
+public on_damage(id)
+{
+	if(g_enabled)
+	{		
+		static attacker; attacker = get_user_attacker(id)
+		static damage; damage = read_data(2)		
+		if(g_showrecieved)
+		{			
+			set_hudmessage(255, 0, 0, 0.45, 0.50, 2, 0.1, 4.0, 0.1, 0.1, -1)
+			ShowSyncHudMsg(id, g_hudmsg2, "%i^n", damage)		
+		}
+		if(is_user_connected(attacker))
+		{
+			switch(g_enabled)
+			{
+				case 1: {
+					set_hudmessage(0, 100, 200, -1.0, 0.55, 2, 0.1, 4.0, 0.02, 0.02, -1)
+					ShowSyncHudMsg(attacker, g_hudmsg1, "%i^n", damage)				
+				}
+				case 2: {
+					if(fm_is_ent_visible(attacker,id))
+					{
+						set_hudmessage(0, 100, 200, -1.0, 0.55, 2, 0.1, 4.0, 0.02, 0.02, -1)
+						ShowSyncHudMsg(attacker, g_hudmsg1, "%i^n", damage)				
+					}
+				}
+			}
+		}
+	}
+}
+
+public Event_BarTime(id) if(g_Defusing[id])
+{	
+	g_NumberID = 0
+	g_Defusing[id] = 0
+}
+
+public bomb_defused(id)
+{
+	g_NumberID = 0
+	g_Defusing[id] = 0
+}
+
+public bomb_defusing(id)
+{
+	if(get_pcvar_num(cvar_restrict))
+		entity_set_float(id, EV_FL_maxspeed, 240.0)
+		
+	g_Defusing[id] = 1
+}
+	
+public bomb_planting(id) if(get_pcvar_num(cvar_restrict))
+	entity_set_float(id, EV_FL_maxspeed, 240.0)
+
+public bomb_planted(id)
+{
+	if(!get_pcvar_num(cvar_wallplant))
+		return
+	
+	g_NumberID = 0
+	for(new i = 0; i < 11; ++i)
+		g_iRandomNumbers[i] = rn()
+	
+	new Float:fOrigin[3]
+	entity_get_vector(id, EV_VEC_origin, fOrigin)
+		
+	new Float:fVelocity[3]
+	VelocityByAim(id, 54, fVelocity)
+	
+	if(fVelocity[2] < -28.0)
+		return 
+
+	new Float:fTraceEnd[3]
+	xs_vec_add(fVelocity, fOrigin, fTraceEnd)
+		
+	new Float:fTraceResult[3]
+	trace_line(id, fOrigin, fTraceEnd, fTraceResult)
+
+	new Float:fNormal[3]
+	if(trace_normal(id, fOrigin, fTraceEnd, fNormal) < 1)
+		return
+
+	new c4 = -1
+	while((c4 = find_ent_by_model(c4, "grenade", "models/w_c4.mdl")))
+	{
+		if(entity_get_int(c4, EV_INT_movetype) == MOVETYPE_FLY 
+		|| (get_entity_flags(c4) & FL_ONGROUND))
+			continue
+			
+		entity_set_int(c4, EV_INT_movetype, MOVETYPE_FLY)
+		entity_set_vector(c4, EV_VEC_velocity, Float:{0.0, 0.0, 0.0})
+		new Float:fNewOrigin[3]
+		fNewOrigin[0] = fTraceResult[0] + (fNormal[0] * -0.01)
+		fNewOrigin[1] = fTraceResult[1] + (fNormal[1] * -0.01)
+		fNewOrigin[2] = fTraceResult[2] +  fNormal[2] + 8.000
+		
+		entity_set_origin(c4, fNewOrigin)
+		
+		new Float:fAngles[3]
+		vector_to_angle(fNormal, fAngles)
+		fAngles[0] -= 180.0, fAngles[1] -= 90.0, fAngles[2] -= 90.0
+		entity_set_vector(c4, EV_VEC_angles, fAngles)
+	}
+}
+
+public client_PreThink(id)
+{
+	if(!get_pcvar_num(cvar_numbers) || !is_user_alive(id) || !g_Defusing[id])
+		return PLUGIN_CONTINUE
+
+	if(g_fDelay[id] + get_delay(id) < get_gametime())
+	{
+		g_NumberID += 1
+		client_cmd(id, "spk %s", DEFUSING_SOUND)
+		g_fDelay[id] = get_gametime()
+	}
+	if(get_pcvar_num(gParasutaAutomata) == 1);
+	if(!is_user_alive(id)) 
+		return
+
+	new Float:fallspeed = 100.0 * -1.0
+
+	new button = get_user_button(id)
+	if(button & IN_USE) 
+	{
+		new Float:velocity[3]
+		entity_get_vector(id, EV_VEC_velocity, velocity)
+		if (velocity[2] < 0.0) 
+		{
+			entity_set_int(id, EV_INT_sequence, 3)
+			entity_set_int(id, EV_INT_gaitsequence, 1)
+			entity_set_float(id, EV_FL_frame, 1.0)
+			entity_set_float(id, EV_FL_framerate, 1.0)
+
+			velocity[2] = (velocity[2] + 40.0 < fallspeed) ? velocity[2] + 40.0 : fallspeed
+			entity_set_vector(id, EV_VEC_velocity, velocity)
+		}
+	
+	set_hudmessage(255, 255, 255, -1.0, 0.4, 0, 0.0, 10.0, 0.0, 0.0, 2)
+	switch(g_NumberID)
+	{
+		case 1: show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), rn(), rn(), rn(), rn(), rn(), rn(), rn(), rn(), rn(), rn()) 
+		case 2: show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), rn(), rn(), rn(), rn(), rn(), rn(), rn(), rn(), rn())
+		case 3: show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), rn(), rn(), rn(), rn(), rn(), rn(), rn(), rn())
+		case 4: show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), n(3), rn(), rn(), rn(), rn(), rn(), rn(), rn())
+		case 5: show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), n(3), n(4), rn(), rn(), rn(), rn(), rn(), rn())
+		case 6: show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), n(3), n(4), n(5), rn(), rn(), rn(), rn(), rn())
+		case 7: show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), n(3), n(4), n(5), n(6), rn(), rn(), rn(), rn())
+		case 8: show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), n(3), n(4), n(5), n(6), n(7), rn(), rn(), rn())
+		case 9: show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), n(3), n(4), n(5), n(6), n(7), n(8), rn(), rn())
+		case 10:show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), n(3), n(4), n(5), n(6), n(7), n(8), n(9), rn())
+		case 11:show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), n(3), n(4), n(5), n(6), n(7), n(8), n(9),n(10)) 
+		default:show_hudmessage(id, "%d%d%d%d%d%d%d%d%d%d%d", n(0), n(1), n(2), n(3), n(4), n(5), n(6), n(7), n(8), n(9),n(10))
+	}
+	return PLUGIN_CONTINUE
+}
+readList()
+{
+	new Configsdir[64]
+	new swear_file[64], replace_file[64]
+	get_configsdir( Configsdir, 63 )
+	format(swear_file, 63, "%s/cuvinte-cenzurate.ini", Configsdir )
+	format(replace_file, 63, "%s/replacements-cenzurat.ini", Configsdir )
+
+	if ( !file_exists(swear_file) )
+	{
+		server_print ( "==========================================================" )
+		server_print ( "[Swear Replacement] %s file not found", swear_file )
+		server_print ( "==========================================================" )
+		return
+	}
+	
+	if ( !file_exists(replace_file) )
+	{
+		server_print ( "==========================================================" )
+		server_print ( "[Swear Replacement] %s file not found", replace_file )
+		server_print ( "==========================================================" )
+		return
+	}
+	
+	new len, i=0
+	while( i < MAX_WORDS && read_file( swear_file, i , g_swearWords[g_swearNum], 19, len ) )
+	{
+		i++
+		if( g_swearWords[g_swearNum][0] == ';' || len == 0 )
+			continue
+		g_swearNum++
+	}
+
+	i=0
+	while( i < MAX_REPLACE && read_file( replace_file, i , g_replaceLines[g_replaceNum], 191, len ) )
+	{
+		i++
+		if( g_replaceLines[g_replaceNum][0] == ';' || len == 0 )
+			continue
+		g_replaceNum++
+	}
+
+	server_print ( "======================================================" )
+	server_print ( "[CENZURAT] loaded %d Swear words", g_swearNum )
+	server_print ( "[CENZURAT] loaded %d Replacement Lines", g_replaceNum )
+	server_print ( "======================================================" )
+
+}
+
+public swearcheck(id)
+{
+	if ( (get_user_flags(id)&ADMIN_LEVEL_A) || !id )
+	 	return PLUGIN_CONTINUE
+
+	new said[192]
+	read_args ( said, 191 )
+
+	string_cleaner ( said )
+
+	new i = 0
+	while ( i < g_swearNum )
+	{
+		if ( containi ( said, g_swearWords[i++] ) != -1 )
+		{
+			new j, playercount, players[32], user_name[32], random_replace = random ( g_replaceNum )
+			get_user_name ( id, user_name, 31 )
+			get_players ( players, playercount, "c" )
+
+			for ( j = 0 ; j < playercount ; j++)
+			{
+				if ( get_user_flags(players[j])&ADMIN_LEVEL_A )
+					client_print( players[j], print_chat, "[CENZURAT] %s : %s",user_name, said )
+			}
+					
+			copy ( said, 191, g_replaceLines[random_replace] )
+			new cmd[10]
+			read_argv ( 0, cmd, 9)
+			engclient_cmd ( id ,cmd ,said )
+
+			return PLUGIN_HANDLED
+		}
+	}
+	return PLUGIN_CONTINUE
+}
+
+public add_swear(id)
+{
+	if ( ( !(get_user_flags(id)&ADMIN_LEVEL_A) && id ) )
+	{
+		client_print ( id, print_console, "[CENZURAT] Access Denied" )
+	 	return PLUGIN_HANDLED
+	}
+
+	if ( read_argc() == 1 )
+	{
+		client_print ( id, print_console, "[CENZURAT] Arguments not provided" )
+	 	return PLUGIN_HANDLED
+	}
+
+	new Configsdir[64]
+	new swear_file[64]
+	get_configsdir( Configsdir, 63 )
+	format ( swear_file, 63, "%s/swearwords.ini", Configsdir )
+
+	read_args ( g_swearWords[g_swearNum], 19 )
+	write_file( swear_file, "" )
+	write_file( swear_file, g_swearWords[g_swearNum] )
+	g_swearNum++
+
+	id ? client_print ( id, print_console, "[CENZURAT] Swear word added to List" ) : server_print ( "[CENZURAT] Swear word added to file" )
+
+	return PLUGIN_HANDLED
+}
+
+public add_replacement(id)
+{
+	if ( ( !(get_user_flags(id)&ADMIN_LEVEL_A) && id ) )
+	{
+		client_print ( id, print_console, "[CENZURAT] Access Denied" )
+	 	return PLUGIN_HANDLED
+	}
+
+	if ( read_argc() == 1 )
+	{
+		client_print ( id, print_console, "[CENZURAT] Arguments not provided" )
+	 	return PLUGIN_HANDLED
+	}
+
+	new Configsdir[64]
+	new replace_file[64]
+	get_configsdir( Configsdir, 63 )
+	format ( replace_file, 63, "%s/replacements.ini", Configsdir )
+
+	read_args ( g_replaceLines[g_replaceNum], 191 )
+	write_file( replace_file, "" )
+	write_file( replace_file, g_replaceLines[g_replaceNum] )
+	g_replaceNum++
+
+	id ? client_print ( id, print_console, "[CENZURAT] Replacement Line added to List" ) : server_print ( "[CENZURAT] Replacement Line added to file" )
+
+	return PLUGIN_HANDLED
+}
+public string_cleaner( str[] )
+{
+	new i, len = strlen ( str )
+	while ( contain ( str, " " ) != -1 )
+		replace ( str, len, " ", "" )
+
+	len = strlen ( str )
+	while ( contain ( str, "|<" ) != -1 )
+		replace ( str, len, "|<", "k" )
+
+	len = strlen ( str )
+	while ( contain ( str, "|>" ) != -1 )
+		replace ( str, len, "|>", "p" )
+
+	len = strlen ( str )
+	while ( contain ( str, "()" ) != -1 )
+		replace ( str, len, "()", "o" )
+
+	len = strlen ( str )
+	while ( contain ( str, "[]" ) != -1 )
+		replace ( str, len, "[]", "o" )
+
+	len = strlen ( str )
+	while ( contain ( str, "{}" ) != -1 )
+		replace ( str, len, "{}", "o" )
+
+	len = strlen ( str )
+	for ( i = 0 ; i < len ; i++ )
+	{
+		if ( str[i] == '@' )
+			str[i] = 'a'
+
+		if ( str[i] == '$' )
+			str[i] = 's'
+
+		if ( str[i] == '0' )
+			str[i] = 'o'
+
+		if ( str[i] == '7' )
+			str[i] = 't'
+
+		if ( str[i] == '3' )
+			str[i] = 'e'
+
+		if ( str[i] == '5' )
+			str[i] = 's'
+
+		if ( str[i] == '<' )
+			str[i] = 'c'
+
+		if ( str[i] == '3' )
+			str[i] = 'e'
+
+	}
+}
+
+stock rn() return random_num(0, 9)
+stock n(value) return g_iRandomNumbers[value]
+stock Float:get_delay(id) return cs_get_user_defuse(id) ? 0.4999 : 0.9999
+
+public client_authorized(id){
+new text[100],name[32],ip[32],timp[32],server[32];
+new Num;
+ 
+get_user_name(id,name,31);
+get_user_ip(id,ip,31);
+get_pcvar_string(serverip,server,31);
+get_time("%H %M %S",timp,31);
+ 
+Num = get_playersnum();
+ 
+if(Num >= get_pcvar_num(minplayers))
+{
+get_pcvar_string(serverip,server,31);
+client_cmd(id, "wait;wait;wait;wait;wait;^"connect^" %s",server);
+}
+ 
+if(get_pcvar_num(redirectlogs) == 1)
+{
+if(!file_exists("addons/amxmodx/configs/redirect_logs.txt"))
+{
+log_amx("redirect_logs.txt is not here! This plugin will not work without this!");
+return PLUGIN_HANDLED_MAIN;
+}
+format(text,99,"[%s] Player %s - IP %s redirecting to %s",timp,name,ip,server);
+write_file("addons/amxmodx/configs/redirect_logs.txt",text,-1);
+}
+return PLUGIN_CONTINUE;
+}
+	
+stock print_chatColor(const id,const input[], any:...)
+	{
+	new msg[191], players[32], count = 1;
+	vformat(msg,190,input,3);
+	replace_all(msg,190,"\g","^4");// green
+	replace_all(msg,190,"\n","^1");// normal
+	replace_all(msg,190,"\t","^3");// team
+	
+	if (id) players[0] = id; else get_players(players,count,"ch");
+	for (new i=0;i<count;i++)
+		if (is_user_connected(players[i]))
+		{
+		message_begin(MSG_ONE_UNRELIABLE,get_user_msgid("SayText"),_,players[i]);
+		write_byte(players[i]);
+		write_string(msg);
+		message_end();
+	}
+}
+stock chat_color(const id, const input[], any:...)
+{
+	new count = 1, players[32]
+	static msg[191]
+	vformat(msg, 190, input, 3)
+	replace_all(msg, 190, "!g", "^4")
+	replace_all(msg, 190, "!y", "^1")
+	replace_all(msg, 190, "!team", "^3")
+	replace_all(msg, 190, "!team2", "^0")
+	if (id) players[0] = id; else get_players(players, count, "ch")
+	{
+		for (new i = 0; i < count; i++)
+		{
+			if (is_user_connected(players[i]))
+			{
+				message_begin(MSG_ONE_UNRELIABLE, get_user_msgid("SayText"), _, players[i])
+				write_byte(players[i])
+				write_string(msg)
+				message_end()
+			}
+		}
+	}
+}
+public plugin_end() {
+}
+/* AMXX-Studio Notes - DO NOT MODIFY BELOW HERE
+*{\\ rtf1\\ ansi\\ deff0{\\ fonttbl{\\ f0\\ fnil Tahoma;}}\n\\ viewkind4\\ uc1\\ pard\\ lang1033\\ f0\\ fs16 \n\\ par }
+*/
